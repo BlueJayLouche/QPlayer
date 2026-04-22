@@ -967,6 +967,16 @@ impl App {
                         self.create_video_window(event_loop);
                     }
                 }
+                AppCommand::ToggleVideoFullscreen => {
+                    if let Some(window) = self.video_window.as_ref() {
+                        let currently_fullscreen = window.fullscreen().is_some();
+                        if currently_fullscreen {
+                            window.set_fullscreen(None);
+                        } else {
+                            window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                        }
+                    }
+                }
                 AppCommand::SaveProject | AppCommand::SaveProjectAs { .. } => {
                     if let Some(pm) = self.plugin_manager.as_mut() {
                         pm.on_save();

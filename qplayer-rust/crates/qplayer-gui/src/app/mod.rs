@@ -301,6 +301,7 @@ pub enum AppCommand {
     SetLimiterThreshold(f32),
     SetAudioDevice(String),
     ToggleVideoWindow,
+    ToggleVideoFullscreen,
     Preload,
     UpdateCueQid { qid: Decimal, new_qid: Decimal },
     UpdateCueName { qid: Decimal, name: String },
