@@ -1,16 +1,21 @@
 //! Example QPlayer plugin.
 //!
 //! Compiles to `wasm32-unknown-unknown` and exports lifecycle hooks.
-//! Uses `no_std` because the target has no OS support.
+//! Uses `no_std` on WASM because the target has no OS support.
 
-#![no_std]
+#![cfg_attr(target_arch = "wasm32", no_std)]
 
 // Host import: log a message.
 // level: 0=info, 1=warn, 2=error
+#[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn host_log(level: i32, ptr: *const u8, len: i32);
 }
+
+// Stub for host builds so the crate compiles on non-WASM targets
+#[cfg(not(target_arch = "wasm32"))]
+unsafe extern "C" fn host_log(_level: i32, _ptr: *const u8, _len: i32) {}
 
 /// Helper to log a static byte string.
 fn log_str(level: i32, msg: &[u8]) {
