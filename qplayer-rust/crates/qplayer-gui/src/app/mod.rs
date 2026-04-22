@@ -105,6 +105,10 @@ pub struct ActiveCueInfo {
     pub volume: f32,
     /// True if the cue is currently paused.
     pub paused: bool,
+    /// Current playback position in samples.
+    pub position: usize,
+    /// Total length in samples, if known.
+    pub length: Option<usize>,
 }
 
 /// Master meter data synced from the audio engine.

@@ -6,12 +6,15 @@ use qplayer_core::Cue;
 use rust_decimal::Decimal;
 
 pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
-    let (cues, selected_id, show_mode) = {
+    let (cues, selected_id, show_mode, active_positions) = {
         let Ok(state) = state.lock() else { return };
+        let active_positions: std::collections::HashMap<rust_decimal::Decimal, (usize, Option<usize>)> =
+            state.active_cues.iter().map(|ac| (ac.qid, (ac.position, ac.length))).collect();
         (
             state.show_file.cues.clone(),
             state.selected_cue_id,
             state.show_mode,
+            active_positions,
         )
     };
 
@@ -48,6 +51,12 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
         ui.label(RichText::new("#").strong());
         ui.separator();
         ui.label(RichText::new("Name").strong());
+        ui.separator();
+        ui.label(RichText::new("Trigger").strong());
+        ui.separator();
+        ui.label(RichText::new("Duration").strong());
+        ui.separator();
+        ui.label(RichText::new("Loop").strong());
         ui.separator();
         ui.label(RichText::new("Type").strong());
         ui.separator();
@@ -99,6 +108,62 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                     if response.clicked() {
                         queue_select(state, qid);
                     }
+                    ui.separator();
+
+                    // Trigger column
+                    let trigger_label = format!("{:?}", base.trigger);
+                    let trigger_short = &trigger_label[..trigger_label.len().min(3)];
+                    ui.label(RichText::new(trigger_short).monospace().size(10.0));
+                    ui.separator();
+
+                    // Duration / Progress column
+                    let duration_str = match cue {
+                        qplayer_core::Cue::Sound { duration, .. }
+                        | qplayer_core::Cue::Video { duration, .. }
+                        | qplayer_core::Cue::TimeCode { duration, .. } => {
+                            if duration.as_secs_f64() > 0.0 {
+                                format_duration(duration)
+                            } else {
+                                "—".to_string()
+                            }
+                        }
+                        _ => "—".to_string(),
+                    };
+                    if let Some((pos, len)) = active_positions.get(&qid) {
+                        if let Some(len) = len {
+                            if *len > 0 {
+                                let progress = (*pos as f32 / *len as f32).clamp(0.0, 1.0);
+                                let bar_width = 60.0;
+                                let bar_height = 6.0;
+                                let (rect, _response) = ui.allocate_exact_size(
+                                    egui::vec2(bar_width, bar_height),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(40, 40, 40));
+                                let fill_rect = egui::Rect::from_min_size(
+                                    rect.min,
+                                    egui::vec2(bar_width * progress, bar_height),
+                                );
+                                ui.painter().rect_filled(fill_rect, 2.0, Color32::from_rgb(100, 180, 100));
+                            } else {
+                                ui.label(RichText::new(&duration_str).monospace().size(10.0));
+                            }
+                        } else {
+                            ui.label(RichText::new(&duration_str).monospace().size(10.0));
+                        }
+                    } else {
+                        ui.label(RichText::new(&duration_str).monospace().size(10.0));
+                    }
+                    ui.separator();
+
+                    // Loop column
+                    let loop_short = match base.loop_mode {
+                        qplayer_core::LoopMode::OneShot => "1",
+                        qplayer_core::LoopMode::Looped => &format!("{}", base.loop_count),
+                        qplayer_core::LoopMode::LoopedInfinite => "∞",
+                        qplayer_core::LoopMode::HoldLast => "H",
+                    };
+                    ui.label(RichText::new(loop_short).monospace().size(10.0));
                     ui.separator();
 
                     // Type column
@@ -205,4 +270,15 @@ fn colour_to_egui(c: qplayer_core::SerializedColour) -> Color32 {
         (c.b * 255.0) as u8,
         (c.a * 255.0) as u8,
     )
+}
+
+fn format_duration(d: &qplayer_core::Timespan) -> String {
+    let secs = d.as_secs_f64();
+    let mins = (secs / 60.0) as u64;
+    let rem_secs = secs % 60.0;
+    if mins > 0 {
+        format!("{}:{:05.2}", mins, rem_secs)
+    } else {
+        format!("{:.2}s", secs)
+    }
 }

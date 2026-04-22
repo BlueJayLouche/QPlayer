@@ -119,6 +119,36 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                 }
             });
     });
+    ui.horizontal(|ui| {
+        ui.label("Delay (s):");
+        let mut delay_secs = base.delay.as_secs_f64();
+        let response = ui.add(egui::DragValue::new(&mut delay_secs).speed(0.1).range(0.0..=60.0));
+        if response.changed() {
+            base.delay = qplayer_core::Timespan::from_secs_f64(delay_secs);
+            changed = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Loop:");
+        egui::ComboBox::from_id_salt("loop_mode")
+            .selected_text(format!("{:?}", base.loop_mode))
+            .show_ui(ui, |ui| {
+                for variant in [qplayer_core::LoopMode::OneShot, qplayer_core::LoopMode::Looped, qplayer_core::LoopMode::LoopedInfinite, qplayer_core::LoopMode::HoldLast] {
+                    if ui.selectable_value(&mut base.loop_mode, variant, format!("{:?}", variant)).clicked() {
+                        changed = true;
+                    }
+                }
+            });
+    });
+    if base.loop_mode == qplayer_core::LoopMode::Looped {
+        ui.horizontal(|ui| {
+            ui.label("Loop Count:");
+            let response = ui.add(egui::DragValue::new(&mut base.loop_count).speed(1).range(1..=999));
+            if response.changed() {
+                changed = true;
+            }
+        });
+    }
 
     ui.separator();
 

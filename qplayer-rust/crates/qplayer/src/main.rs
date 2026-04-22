@@ -47,6 +47,12 @@ struct ActiveCue {
     input: std::sync::Arc<qplayer_audio::MixerInput>,
 }
 
+/// A cue that is waiting for its delay timer to expire before playing.
+struct DelayedCue {
+    cue: qplayer_core::Cue,
+    start_at: std::time::Instant,
+}
+
 struct App {
     // ── wgpu core ──
     instance: wgpu::Instance,
@@ -76,6 +82,7 @@ struct App {
     // ── audio ──
     audio_engine: AudioEngine,
     active_cues: Vec<ActiveCue>,
+    delayed_cues: Vec<DelayedCue>,
     paused: bool,
 
     // ── video playback ──
@@ -218,6 +225,7 @@ impl App {
             plugin_manager,
             last_slow_update: Instant::now(),
             active_cues: Vec::new(),
+            delayed_cues: Vec::new(),
             paused: false,
         }
     }
@@ -380,6 +388,18 @@ impl App {
     fn play_cue(&mut self, cue: &qplayer_core::Cue, event_loop: &ActiveEventLoop) {
         let qid = cue.base().qid;
         let name = cue.base().name.clone();
+        let delay = cue.base().delay;
+
+        // If cue has a delay, schedule it instead of playing immediately
+        if delay.as_secs_f64() > 0.0 {
+            log::info!("Delaying cue Q{} by {:.2}s", qid, delay.as_secs_f64());
+            self.delayed_cues.push(DelayedCue {
+                cue: cue.clone(),
+                start_at: std::time::Instant::now() + std::time::Duration::from_secs_f64(delay.as_secs_f64()),
+            });
+            return;
+        }
+
         match cue {
             qplayer_core::Cue::Sound { path, .. } => {
                 log::info!("Go SoundCue: {}", path);
@@ -579,6 +599,7 @@ impl App {
         self.video_start_clock = None;
         self.audio_engine.stop_all();
         self.active_cues.clear();
+        self.delayed_cues.clear();
         self.paused = false;
     }
 
@@ -838,6 +859,24 @@ impl App {
 
     fn render_control(&mut self, event_loop: &ActiveEventLoop) {
         self.check_finished_cues(event_loop);
+
+        // Check for delayed cues whose timer has expired
+        {
+            let now = std::time::Instant::now();
+            let mut ready = Vec::new();
+            self.delayed_cues.retain(|dc| {
+                if dc.start_at <= now {
+                    ready.push(dc.cue.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            for cue in ready {
+                self.play_cue(&cue, event_loop);
+            }
+        }
+
         self.update_window_title();
         let Some(surface) = self.control_surface.as_ref() else { return };
         let Some(config) = self.control_config.as_ref() else { return };
@@ -863,6 +902,8 @@ impl App {
                     name: ac.name.clone(),
                     volume: ac.input.volume(),
                     paused: !ac.input.is_active(),
+                    position: ac.input.position(),
+                    length: ac.input.length(),
                 }
             }).collect();
             if let Ok(mut state) = self.qplayer.state().lock() {

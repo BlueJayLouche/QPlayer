@@ -103,6 +103,18 @@ impl MixerInput {
     pub fn is_finished(&self) -> bool {
         self.finished.load(Ordering::Relaxed)
     }
+
+    /// Current playback position in samples (mono count).
+    #[inline]
+    pub fn position(&self) -> usize {
+        self.source.position()
+    }
+
+    /// Total length in samples, if known.
+    #[inline]
+    pub fn length(&self) -> Option<usize> {
+        self.source.length()
+    }
 }
 
 /// Summing mixer.
