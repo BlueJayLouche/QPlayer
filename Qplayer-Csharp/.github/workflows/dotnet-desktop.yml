@@ -1,0 +1,69 @@
+name: Build .NET Application
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    env:
+        EnableWindowsTargeting: true
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v2
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Restore
+      working-directory: ${{ github.workspace }}
+      run: |
+        dotnet restore -r win-x64 QPlayer/QPlayer.csproj
+        dotnet restore -r win-x64 QPlayer.OSCCuePlugin/QPlayer.OSCCuePlugin.csproj
+
+    - name: Build
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        dotnet publish -o "publish/" -r win-x64 --no-self-contained --no-restore --configuration Release QPlayer/QPlayer.csproj
+        dotnet publish -o "publish/plugins/" -r win-x64 --no-self-contained --no-restore --configuration Release QPlayer.OSCCuePlugin/QPlayer.OSCCuePlugin.csproj
+
+    # Compress build artifacts
+    - name: Compress build artifacts
+      uses: thedoctor0/zip-release@0.7.6
+      with:
+        type: zip
+        filename: ../QPlayer-release.zip
+        directory: publish/
+  
+    # Upload the build artifacts
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ReleaseBinaries
+        path: QPlayer-release.zip
+
+  create-release:
+    needs: build
+    name: "Create Release"
+    runs-on: "ubuntu-latest"
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: ReleaseBinaries
+      - uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          automatic_release_tag: "latest"
+          prerelease: true
+          title: "Development Build"
+          files: QPlayer-release.zip

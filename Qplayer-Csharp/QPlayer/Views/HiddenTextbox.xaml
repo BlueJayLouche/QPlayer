@@ -1,0 +1,15 @@
+﻿<UserControl x:Class="QPlayer.Views.HiddenTextbox"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:QPlayer.Views"
+             x:Name="HiddenTextboxInst"
+             mc:Ignorable="d" 
+             Focusable="True" IsTabStop="True" GotKeyboardFocus="HiddenTextboxInst_GotKeyboardFocus" KeyboardNavigation.TabNavigation="Local"
+             d:DesignHeight="30" d:DesignWidth="200">
+    <Grid Height="{Binding ActualHeight, Mode=OneWay, RelativeSource={RelativeSource AncestorType=local:HiddenTextbox}}">
+        <Label Name="Label" VerticalContentAlignment="Center" MouseDown="Label_MouseDown" MouseDoubleClick="Label_MouseDoubleClick" Content="{Binding Text, ElementName=HiddenTextboxInst}"/>
+        <local:TextField x:Name="TextFieldInst" ReturnValidates="True" LostKeyboardFocus="TextBox_LostKeyboardFocus" Visibility="Collapsed" Text="{Binding Text, ElementName=HiddenTextboxInst}"/>
+    </Grid>
+</UserControl>

@@ -1,0 +1,23 @@
+﻿<Application x:Class="QPlayer.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:QPlayer"
+             StartupUri="Views/MainWindow.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="ThemesV2/SoftDark.xaml"/>
+                <ResourceDictionary Source="ThemesV2/ControlColours.xaml"/>
+                <ResourceDictionary Source="ThemesV2/Controls.xaml"/>
+                <ResourceDictionary Source="ThemesV2/CustomControls.xaml"/>
+                <ResourceDictionary Source="Views/CueDataTemplates.xaml"/>
+                <ResourceDictionary Source="pack://application:,,,/ColorPicker;component/Styles/DefaultColorPickerStyle.xaml" />
+                <ResourceDictionary Source="ThemesV2/Icons.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <FontFamily x:Key="CascadiaMono">pack://application:,,,/Resources/#Cascadia Mono</FontFamily>
+            <!--<FontFamily x:Key="Inter">pack://application:,,,/Resources/#Inter</FontFamily>-->
+
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

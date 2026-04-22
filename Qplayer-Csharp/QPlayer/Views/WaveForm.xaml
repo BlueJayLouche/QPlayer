@@ -1,0 +1,98 @@
+﻿<UserControl x:Class="QPlayer.Views.WaveForm"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:QPlayer.Views" xmlns:viewmodels="clr-namespace:QPlayer.ViewModels"
+             mc:Ignorable="d" 
+             d:DataContext="{d:DesignInstance Type=viewmodels:SoundCueViewModel}"
+             d:DesignHeight="100" d:DesignWidth="250">
+    <DockPanel LastChildFill="True" Background="{DynamicResource AREghZyBrush.Primary.2.Background.Static}">
+        <Grid x:Name="NavBar" Cursor="SizeWE" DockPanel.Dock="Bottom"
+              Height="{Binding NavBarHeight, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}, FallbackValue=20}"
+              ToolTip="Click and drag to zoom and pan the waveform graph."
+              MouseDown="WaveFormZoom_MouseDown" MouseUp="WaveFormZoom_MouseUp"
+              MouseLeave="WaveFormZoom_MouseLeave" MouseMove="WaveFormZoom_MouseMove"
+              Loaded="NavBar_Loaded" Unloaded="NavBar_Unloaded">
+            <Grid.Background>
+                <LinearGradientBrush EndPoint="10,0.5" StartPoint="0,0.5" SpreadMethod="Reflect" MappingMode="Absolute">
+                    <LinearGradientBrush.RelativeTransform>
+                        <TransformGroup>
+                            <ScaleTransform x:Name="NavBarScale" CenterY="0.5" CenterX="0.5" ScaleX="1.0"/>
+                            <TranslateTransform x:Name="NavBarTranslate" X="1"/>
+                        </TransformGroup>
+                    </LinearGradientBrush.RelativeTransform>
+                    <GradientStop Color="{DynamicResource AREghZyColour.Deep.1.Border.Static}"/>
+                    <GradientStop Color="{DynamicResource AREghZyColour.Deep.3.Border.Static}" Offset=".06"/>
+                </LinearGradientBrush>
+            </Grid.Background>
+            <TextBlock Text="{Binding WaveFormRenderer.ViewStart, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}, 
+                FallbackValue=00:00:00,
+                StringFormat=hh\\:mm\\:ss\\.ff}" 
+                       FontSize="{Binding TimeStampFontSize, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}"
+                       HorizontalAlignment="Left" VerticalAlignment="Center" Padding="5,0"/>
+            <TextBlock Text="{Binding WaveFormRenderer.ViewEnd, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}, 
+                FallbackValue=00:00:00, 
+                StringFormat=hh\\:mm\\:ss\\.ff}" 
+                       FontSize="{Binding TimeStampFontSize, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}" 
+                       HorizontalAlignment="Right" VerticalAlignment="Center" Padding="5,0"/>
+        </Grid>
+        <Grid>
+            <TextBlock Padding="2" Text="Waveform is being displayed in another window..." 
+                       TextAlignment="Center" TextWrapping="Wrap" VerticalAlignment="Center"
+                       Visibility="{Binding InvWaveFormVisible, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}"/>
+            <TextBlock Padding="2" Text="Waveform loading..." 
+                       TextAlignment="Center" TextWrapping="Wrap" VerticalAlignment="Center"
+                       Visibility="{Binding WaveFormLoading, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}"/>
+            <Rectangle x:Name="Graph" SizeChanged="WaveForm_SizeChanged" MouseDown="Graph_MouseDown" Cursor="IBeam"
+                       Visibility="{Binding WaveFormVisible, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}">
+                <Rectangle.Fill>
+                    <DrawingBrush Drawing="{Binding WaveFormRenderer.WaveFormDrawing, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}" 
+                                  AlignmentY="Bottom" AlignmentX="Left" Stretch="Uniform"/>
+                </Rectangle.Fill>
+            </Rectangle>
+            <Button Content="Z"
+                    Command="{Binding ResetZoomCommand, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}"
+                    FontSize="8" Width="16" Height="16" Padding="0"
+                    HorizontalAlignment="Left" VerticalAlignment="Top"
+                    VerticalContentAlignment="Center" HorizontalContentAlignment="Center">
+                <Button.ToolTip>
+                    <ToolTip Content="Resets the zoom to fit the whole waveform in view." FontSize="11" FontWeight="Medium"/>
+                </Button.ToolTip>
+            </Button>
+            <Button Content="[  ]"
+                    Command="{Binding PopupCommand, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}"
+                    FontSize="6" Width="16" Height="16" Padding="0"
+                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                    VerticalContentAlignment="Center" HorizontalContentAlignment="Center">
+                <Button.ToolTip>
+                    <ToolTip Content="Open the waveform in a separate window." FontSize="11" FontWeight="Medium"/>
+                </Button.ToolTip>
+            </Button>
+            <Rectangle x:Name="PlaybackMarker" Width="10" HorizontalAlignment="Left" IsHitTestVisible="False"
+                       Margin="{Binding PlaybackMarkerPos, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}"
+                       Visibility="{Binding WaveFormVisible, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}">
+                <Rectangle.Fill>
+                    <LinearGradientBrush EndPoint="1,0.5" StartPoint="0,0.5">
+                        <GradientStop Color="#07af"/>
+                        <GradientStop Color="#a7af" Offset="1"/>
+                    </LinearGradientBrush>
+                </Rectangle.Fill>
+            </Rectangle>
+            <Grid x:Name="TimeInMarker" Width="20" HorizontalAlignment="Left" Cursor="SizeWE"
+                  Margin="{Binding TimeInMarkerPos, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}"
+                  Visibility="{Binding WaveFormVisible, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}"
+                  MouseDown="TimeInMarker_MouseDown" MouseUp="TimeInMarker_MouseUp" MouseMove="TimeInMarker_MouseMove">
+                <Rectangle Stroke="#f1c2" Width="1" HorizontalAlignment="Left"/>
+                <Rectangle Fill="#a1c2" VerticalAlignment="Bottom" Height="20" ToolTip="Adjusts the start time of this cue."/>
+            </Grid>
+            <Grid x:Name="TimeOutMarker" Width="20" HorizontalAlignment="Left" Cursor="SizeWE"
+                  Margin="{Binding TimeOutMarkerPos, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}"
+                  Visibility="{Binding WaveFormVisible, RelativeSource={RelativeSource AncestorType={x:Type local:WaveForm}}}"
+                  MouseDown="TimeOutMarker_MouseDown" MouseUp="TimeOutMarker_MouseUp" MouseMove="TimeOutMarker_MouseMove">
+                <Rectangle Stroke="#fc12" Width="1" HorizontalAlignment="Right"/>
+                <Rectangle Fill="#ac12" VerticalAlignment="Bottom" Height="20" ToolTip="Adjusts the end time of this cue."/>
+            </Grid>
+        </Grid>
+    </DockPanel>
+</UserControl>

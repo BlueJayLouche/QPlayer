@@ -1,0 +1,27 @@
+[package]
+name = "qplayer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "QPlayer binary — event loop, state orchestration, main application"
+
+[[bin]]
+name = "qplayer"
+path = "src/main.rs"
+
+[dependencies]
+qplayer-core = { workspace = true }
+qplayer-audio = { workspace = true }
+qplayer-gui = { workspace = true }
+qplayer-protocols = { workspace = true }
+qplayer-plugin-api = { workspace = true }
+anyhow = { workspace = true }
+dirs = { workspace = true }
+rfd = { workspace = true }
+tokio = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+env_logger = "0.11"

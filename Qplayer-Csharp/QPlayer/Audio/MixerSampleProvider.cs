@@ -1,0 +1,219 @@
+﻿using NAudio.Utils;
+using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
+using System.Runtime;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace QPlayer.Audio;
+
+public class MixerSampleProvider : ISamplePositionProvider
+{
+    private readonly List<ISampleProvider> mixerInputs;
+    private const int maxInputs = 1024;
+    private float[] sourceBuffer = [];
+    private bool firstRead = true;
+    private long pos;
+
+    public WaveFormat WaveFormat { get; private set; }
+    public long Position { get => pos; set => throw new NotImplementedException(); }
+    public int SourceCount => mixerInputs.Count;
+
+    public event EventHandler<SampleProviderEventArgs>? MixerInputEnded;
+
+    public MixerSampleProvider(WaveFormat waveFormat)
+    {
+        WaveFormat = waveFormat;
+        mixerInputs = [];
+    }
+
+    /// <summary>
+    /// Ensures the audio thread using this mixer has a sufficiently high priority. 
+    /// Due to the design of NAudio, this works by setting the thread priority the 
+    /// first time the <see cref="Read(float[], int, int)"/> method is called.
+    /// </summary>
+    internal void ResetThreadPriority()
+    {
+        firstRead = true;
+    }
+
+    //private TimeSpan lastGCTime;
+
+    public int Read(float[] buffer, int offset, int count)
+    {
+        if (firstRead)
+        {
+            firstRead = false;
+            SetThreadPriority();
+        }
+
+        /*var gcTime = GC.GetTotalPauseDuration();
+        if (gcTime - lastGCTime > TimeSpan.FromMilliseconds(20))
+        {
+            MainViewModel.Log($"Spent {gcTime - lastGCTime} in GC since last audio buffer!", MainViewModel.LogLevel.Warning);
+            lastGCTime = gcTime;
+        }*/
+
+        sourceBuffer = BufferHelpers.Ensure(sourceBuffer, count);
+        lock (mixerInputs)
+        {
+            int inputCount = mixerInputs.Count;
+            if (inputCount == 0)
+            {
+                // Why are we using this instead of Array.Clear?
+                // Because this float array is actually (usually) a byte array in disguise.
+                // But since the array knows this, it ends up not clearing enough items.
+                // Hence, we treat it as a span which behaves as expected.
+                buffer.AsSpan(offset, count).Clear();
+                return count;
+            }
+
+            // Copy the last input to the output buffer
+            int read = mixerInputs[^1].Read(buffer, offset, count);
+            if (read < count)
+            {
+                InputEnded(inputCount - 1);
+                buffer.AsSpan(offset + read, count - read).Clear();
+            }
+
+            // Read each subsequant input and add them to the buffer
+            // Mixer inputs are read in reverse order so that if the
+            // input list is removed from, inputs won't be missed.
+            for (int i = inputCount - 2; i >= 0; i--)
+            {
+                read = mixerInputs[i].Read(sourceBuffer, 0, count);
+                if (read < count)
+                    InputEnded(i);
+
+                ref var srcBuf = ref MemoryMarshal.GetArrayDataReference(sourceBuffer);
+                ref var dstBuf = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(buffer), offset);
+                int s = 0;
+                if (Vector256.IsHardwareAccelerated)
+                {
+                    for (; s <= read - Vector256<float>.Count; s += Vector256<float>.Count)
+                    {
+                        var a = Vector256.LoadUnsafe(ref srcBuf);
+                        var b = Vector256.LoadUnsafe(ref dstBuf);
+
+                        var res = Vector256.Add(a, b);
+                        ref var dstByte = ref Unsafe.As<float, byte>(ref dstBuf);
+                        Unsafe.WriteUnaligned(ref dstByte, res);
+
+                        dstBuf = ref Unsafe.Add(ref dstBuf, Vector<float>.Count);
+                        srcBuf = ref Unsafe.Add(ref srcBuf, Vector<float>.Count);
+                    }
+                }
+
+                for (; s < read; s++)
+                {
+                    dstBuf += srcBuf;
+                    dstBuf = ref Unsafe.Add(ref dstBuf, 1);
+                    srcBuf = ref Unsafe.Add(ref srcBuf, 1);
+                }
+            }
+        }
+
+        unchecked
+        {
+            pos += count;
+        }
+        return count;
+
+        void InputEnded(int input)
+        {
+            this.MixerInputEnded?.Invoke(this, new SampleProviderEventArgs(mixerInputs[input]));
+            mixerInputs.RemoveAt(input);
+        }
+    }
+
+    public void AddMixerInput(IWaveProvider input)
+    {
+        AddMixerInput(ConvertWaveProviderIntoSampleProvider(input));
+    }
+
+    public void AddMixerInput(ISampleProvider input)
+    {
+        if (WaveFormat.SampleRate != input.WaveFormat.SampleRate || WaveFormat.Channels != input.WaveFormat.Channels)
+            throw new ArgumentException("All mixer inputs must have the same WaveFormat");
+
+        lock (mixerInputs)
+        {
+            if (mixerInputs.Count >= maxInputs)
+                throw new InvalidOperationException("Too many mixer inputs");
+
+            mixerInputs.Add(input);
+        }
+    }
+
+    /*public bool RemoveMixerInput(IWaveProvider input)
+    {
+        mixerInputs.OfType<SampleProviderConverterBase>().First(x=>x.source)
+    }*/
+
+    public bool RemoveMixerInput(ISampleProvider input)
+    {
+        lock (mixerInputs)
+        {
+            return mixerInputs.Remove(input);
+        }
+    }
+
+    public void RemoveAllMixerInputs()
+    {
+        lock (mixerInputs)
+        {
+            mixerInputs.Clear();
+        }
+    }
+
+    public bool Contains(ISampleProvider sampleProvider)
+    {
+        lock (mixerInputs)
+        {
+            return mixerInputs.Contains(sampleProvider);
+        }
+    }
+
+    private static void SetThreadPriority()
+    {
+        Thread.CurrentThread.Priority = ThreadPriority.Highest;
+        int task = 0;
+        var handle = AVRTLib.AvSetMmThreadCharacteristicsW("Pro Audio", ref task);
+        AVRTLib.AvSetMmThreadPriority(handle, AVRTLib.AVRT_PRIORITY.AVRT_PRIORITY_CRITICAL);
+        Thread.CurrentThread.Name = "Audio Thread";
+    }
+
+    public static ISampleProvider ConvertWaveProviderIntoSampleProvider(IWaveProvider waveProvider)
+    {
+        if (waveProvider.WaveFormat.Encoding == WaveFormatEncoding.Pcm)
+        {
+            return waveProvider.WaveFormat.BitsPerSample switch
+            {
+                8 => new Pcm8BitToSampleProvider(waveProvider),
+                16 => new Pcm16BitToSampleProvider(waveProvider),
+                24 => new Pcm24BitToSampleProvider(waveProvider),
+                32 => new Pcm32BitToSampleProvider(waveProvider),
+                _ => throw new InvalidOperationException("Unsupported bit depth"),
+            };
+        }
+
+        if (waveProvider.WaveFormat.Encoding == WaveFormatEncoding.IeeeFloat)
+        {
+            return waveProvider.WaveFormat.BitsPerSample switch
+            {
+                64 => new WaveToSampleProvider64(waveProvider),
+                _ => new WaveToSampleProvider(waveProvider)
+            };
+        }
+
+        throw new ArgumentException("Unsupported source encoding");
+    }
+}

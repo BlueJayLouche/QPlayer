@@ -1,0 +1,111 @@
+﻿<ResourceDictionary x:Class="QPlayer.Views.CueDataTemplates"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:QPlayer.Views"
+             xmlns:vm="clr-namespace:QPlayer.ViewModels"
+             xmlns:util="clr-namespace:QPlayer.Utilities"
+             xmlns:model="clr-namespace:QPlayer.Models"
+             mc:Ignorable="d">
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="../ThemesV2/Icons.xaml"/>
+    </ResourceDictionary.MergedDictionaries>
+    <util:ElapsedTimeConverter x:Key="ElapsedTimeConverter"/>
+    <util:GreaterThanConverter x:Key="GreaterThanConverter"/>
+    <util:TriggerModeConverter x:Key="TriggerModeConverter"/>
+    <util:LoopModeConverter x:Key="LoopModeConverter"/>
+    <DataTemplate x:Key="GroupIconTemplate" DataType="bool">
+        <Rectangle/>
+    </DataTemplate>
+
+    <DataTemplate x:Key="PlaybackIndicatorTemplate" DataType="vm:CueViewModel">
+        <Grid Width="{Binding RelativeSource={RelativeSource AncestorType=ContentControl}, Path=ActualWidth}">
+            <ProgressBar HorizontalAlignment="Stretch">
+                <ProgressBar.Value>
+                    <MultiBinding Converter="{StaticResource ElapsedTimeConverter}">
+                        <Binding Path="PlaybackTime" Mode="OneWay"/>
+                        <Binding Path="Duration" Mode="OneWay"/>
+                    </MultiBinding>
+                </ProgressBar.Value>
+            </ProgressBar>
+            <Label Name="PlaybackTimeLabel" Content="{Binding PlaybackTimeStringShort}" VerticalContentAlignment="Center" HorizontalContentAlignment="Center"/>
+        </Grid>
+        <DataTemplate.Triggers>
+            <DataTrigger 
+                Binding="{Binding Path=ActualWidth,
+                RelativeSource={RelativeSource AncestorType=ContentControl}, 
+                Converter={StaticResource GreaterThanConverter},
+                ConverterParameter=80}" 
+                Value="True">
+                <Setter TargetName="PlaybackTimeLabel" Property="Content" Value="{Binding PlaybackTimeString}"/>
+            </DataTrigger>
+        </DataTemplate.Triggers>
+    </DataTemplate>
+    
+    <DataTemplate x:Key="CueTypeTemplate" DataType="vm:CueViewModel">
+        <Image x:Name="IconImg" Source="{StaticResource IconPlay}" MaxHeight="20" MaxWidth="20" VerticalAlignment="Center">
+            <Image.ToolTip>
+                <ToolTip Content="{Binding TypeName, Mode=OneWay}"/>
+            </Image.ToolTip>
+        </Image>
+        <DataTemplate.Triggers>
+            <DataTrigger Binding="{Binding TypeName}" Value="GroupCue">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconGroupCue}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding TypeName}" Value="StopCue">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconStopCue}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding TypeName}" Value="DummyCue">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconDummyCue}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding TypeName}" Value="SoundCue">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconSoundCue}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding TypeName}" Value="TimeCodeCue">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconTimeCodeCue}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding TypeName}" Value="VolumeCue">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconVolumeCue}"/>
+            </DataTrigger>
+        </DataTemplate.Triggers>
+    </DataTemplate>
+
+    <DataTemplate x:Key="LoopModeTemplate" DataType="model:LoopMode">
+        <Image x:Name="IconImg" Source="{StaticResource IconStop}" MaxHeight="20" MaxWidth="20" VerticalAlignment="Center">
+            <Image.ToolTip>
+                <ToolTip Content="{Binding Mode=OneWay}"/>
+            </Image.ToolTip>
+        </Image>
+        <DataTemplate.Triggers>
+            <DataTrigger Binding="{Binding}" Value="{x:Static model:LoopMode.Looped}">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconLoop}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding}" Value="{x:Static model:LoopMode.LoopedInfinite}">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconLoop}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding}" Value="{x:Static model:LoopMode.OneShot}">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconOneShot}"/>
+            </DataTrigger>
+        </DataTemplate.Triggers>
+    </DataTemplate>
+
+    <DataTemplate x:Key="TriggerModeTemplate" DataType="model:TriggerMode">
+        <Image x:Name="IconImg" Source="{StaticResource IconBlank}" MaxHeight="20" MaxWidth="20" VerticalAlignment="Center">
+            <Image.ToolTip>
+                <ToolTip Content="{Binding Mode=OneWay}"/>
+            </Image.ToolTip>
+        </Image>
+        <DataTemplate.Triggers>
+            <DataTrigger Binding="{Binding}" Value="{x:Static model:TriggerMode.Go}">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconBlank}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding}" Value="{x:Static model:TriggerMode.WithLast}">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconWithLast}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding}" Value="{x:Static model:TriggerMode.AfterLast}">
+                <Setter TargetName="IconImg" Property="Source" Value="{StaticResource IconAfterLast}"/>
+            </DataTrigger>
+        </DataTemplate.Triggers>
+    </DataTemplate>
+</ResourceDictionary>

@@ -1,0 +1,77 @@
+﻿using CommunityToolkit.Mvvm.ComponentModel;
+using QPlayer.Audio;
+using QPlayer.SourceGenerator;
+using System;
+using System.Windows.Threading;
+
+namespace QPlayer.ViewModels;
+
+public partial class AudioMeterViewModel : ObservableObject
+{
+    [Reactive, CachedNotification, NoUndo] private float peakL;
+    [Reactive, CachedNotification, NoUndo] private float peakR;
+    [Reactive, CachedNotification, NoUndo] private float rMSL;
+    [Reactive, CachedNotification, NoUndo] private float rMSR;
+    [Reactive, CachedNotification, NoUndo] private bool clip;
+
+    private readonly Dispatcher dispatcher;
+    private readonly DispatcherTimer timer;
+    private MeteringEvent meterEventA;
+    private MeteringEvent meterEventB;
+    private bool swap;
+
+    public AudioMeterViewModel(Dispatcher dispatcher)
+    {
+        this.dispatcher = dispatcher;
+        PeakL = -99;
+        PeakR = -99;
+        RMSL = -99;
+        RMSR = -99;
+
+        timer = new(DispatcherPriority.Loaded, dispatcher);
+        timer.Tick += Timer_Tick;
+        timer.Interval = TimeSpan.FromMilliseconds(20);
+        timer.Start();
+    }
+
+    private void Timer_Tick(object? sender, EventArgs e)
+    {
+        MeteringEvent meter;
+        if (swap)
+            meter = meterEventB;
+        else
+            meter = meterEventA;
+
+        PeakL = ComputeMeter(PeakL, meter.peakL);
+        PeakR = ComputeMeter(PeakR, meter.peakR);
+        RMSL = ComputeMeter(RMSL, meter.rmsL);
+        RMSR = ComputeMeter(RMSR, meter.rmsR);
+        Clip = peakL >= -1e-9f || peakR >= -1e-9f;
+    }
+
+    public void ProcessSample(MeteringEvent meter)
+    {
+        if (swap)
+            meterEventA = meter;
+        else
+            meterEventB = meter;
+        swap ^= true;
+        return;
+    }
+
+    private static float ComputeMeter(float prev, float next)
+    {
+        float x = prev;
+        x = DbToLin(x);
+        if (next > x)
+            x = next;
+        else
+            x *= 0.96f;
+        x = MathF.Min(MathF.Max(x, 1e-10f), 1);
+        return LinToDb(x);
+    }
+
+    private static float LinToDb(float x) => 20 * MathF.Log10(x);
+
+    private static float DbToLin(float x) => MathF.Pow(10, x / 20);
+}
