@@ -1479,8 +1479,31 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
                     if event.state == winit::event::ElementState::Pressed {
-                        let is_f = event.logical_key == winit::keyboard::Key::Character("f".into());
-                        if is_f && self.modifiers.control_key() {
+                        use winit::keyboard::{Key, NamedKey, PhysicalKey};
+                        let is_esc = event.logical_key == Key::Named(NamedKey::Escape);
+                        let is_f11 = matches!(event.physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::F11));
+                        let is_f = event.logical_key == Key::Character("f".into());
+                        let has_ctrl = self.modifiers.control_key() || self.modifiers.super_key();
+
+                        // Esc always exits fullscreen
+                        if is_esc {
+                            if let Some(window) = self.video_window.as_ref() {
+                                window.set_fullscreen(None);
+                            }
+                        }
+                        // F11 toggles fullscreen
+                        else if is_f11 {
+                            if let Some(window) = self.video_window.as_ref() {
+                                let currently_fullscreen = window.fullscreen().is_some();
+                                if currently_fullscreen {
+                                    window.set_fullscreen(None);
+                                } else {
+                                    window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                                }
+                            }
+                        }
+                        // Ctrl+F or Cmd+F toggles fullscreen
+                        else if is_f && has_ctrl {
                             if let Some(window) = self.video_window.as_ref() {
                                 let currently_fullscreen = window.fullscreen().is_some();
                                 if currently_fullscreen {
