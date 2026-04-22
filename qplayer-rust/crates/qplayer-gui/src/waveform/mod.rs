@@ -104,9 +104,10 @@ fn save_peaks(audio_path: &str, peaks: &[(f32, f32)]) -> std::io::Result<()> {
 /// Draw a waveform from pre-computed peak data with zoom and pan support.
 ///
 /// `zoom` > 1.0 zooms in horizontally. `scroll_offset` is in bars from the left.
+/// `height` is the desired height in points (default 48.0 for the inspector mini-view).
 /// Returns the updated (zoom, scroll_offset) after handling user input.
-pub fn draw(ui: &mut egui::Ui, peaks: &[(f32, f32)], zoom: f32, scroll_offset: f32) -> (f32, f32) {
-    let desired_size = egui::vec2(ui.available_width(), 48.0);
+pub fn draw(ui: &mut egui::Ui, peaks: &[(f32, f32)], zoom: f32, scroll_offset: f32, height: f32) -> (f32, f32) {
+    let desired_size = egui::vec2(ui.available_width(), height);
     let _id = ui.auto_id_with("waveform");
     let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
     let painter = ui.painter();

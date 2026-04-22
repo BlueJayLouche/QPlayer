@@ -191,6 +191,12 @@ pub struct SharedState {
     pub show_about_window: bool,
     /// Whether the Plugin Manager window is open.
     pub show_plugin_manager: bool,
+    /// Whether the Waveform pop-out window is open.
+    pub show_waveform_window: bool,
+    /// Waveform window zoom level (independent from inspector).
+    pub waveform_window_zoom: f32,
+    /// Waveform window scroll offset in bars.
+    pub waveform_window_scroll: f32,
     /// List of loaded plugins (name, path) for the plugin manager window.
     pub plugin_list: Vec<(String, String)>,
     /// Progress overlay: if Some, shows a blocking modal with message + progress.
@@ -227,6 +233,9 @@ impl Default for SharedState {
             show_log_window: false,
             show_about_window: false,
             show_plugin_manager: false,
+            show_waveform_window: false,
+            waveform_window_zoom: 1.0,
+            waveform_window_scroll: 0.0,
             plugin_list: Vec::new(),
             progress_overlay: None,
         }
@@ -303,6 +312,7 @@ pub enum CueType {
     Group,
     Dummy,
     TimeCode,
+    Osc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -701,6 +711,48 @@ impl QPlayerApp {
             state.show_plugin_manager = show_plugins;
         }
 
+        // Waveform pop-out window
+        let mut show_waveform = if let Ok(state) = self.state.lock() {
+            state.show_waveform_window
+        } else {
+            false
+        };
+        if show_waveform {
+            let (selected_path, peaks, zoom, scroll) = if let Ok(state) = self.state.lock() {
+                let path = state.selected_cue().and_then(|cue| match cue {
+                    qplayer_core::Cue::Sound { path, .. } | qplayer_core::Cue::Video { path, .. } => Some(path.clone()),
+                    _ => None,
+                }).unwrap_or_default();
+                let peaks = state.waveform_cache.get(&path).cloned();
+                (path, peaks, state.waveform_window_zoom, state.waveform_window_scroll)
+            } else {
+                show_waveform = false;
+                (String::new(), None, 1.0, 0.0)
+            };
+            egui::Window::new("Waveform")
+                .collapsible(false)
+                .resizable(true)
+                .default_size([800.0, 300.0])
+                .open(&mut show_waveform)
+                .show(ctx, |ui| {
+                    if selected_path.is_empty() {
+                        ui.label("Select a Sound or Video cue to view its waveform.");
+                    } else if let Some(peaks) = peaks {
+                        ui.label(format!("{}", std::path::Path::new(&selected_path).file_name().and_then(|n| n.to_str()).unwrap_or(&selected_path)));
+                        let (new_zoom, new_scroll) = crate::waveform::draw(ui, &peaks, zoom, scroll, 200.0);
+                        if let Ok(mut state) = self.state.lock() {
+                            state.waveform_window_zoom = new_zoom;
+                            state.waveform_window_scroll = new_scroll;
+                        }
+                    } else {
+                        ui.label("Generating waveform…");
+                    }
+                });
+        }
+        if let Ok(mut state) = self.state.lock() {
+            state.show_waveform_window = show_waveform;
+        }
+
         // About window
         let mut show_about = if let Ok(state) = self.state.lock() {
             state.show_about_window
@@ -867,6 +919,16 @@ impl QPlayerApp {
                 if ui.checkbox(&mut show_plugins, "Plugin Manager").clicked() {
                     if let Ok(mut state) = self.state.lock() {
                         state.show_plugin_manager = show_plugins;
+                    }
+                    ui.close();
+                }
+                let mut show_waveform = {
+                    let Ok(state) = self.state.lock() else { return; };
+                    state.show_waveform_window
+                };
+                if ui.checkbox(&mut show_waveform, "Waveform").clicked() {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.show_waveform_window = show_waveform;
                     }
                     ui.close();
                 }
@@ -1133,6 +1195,10 @@ impl QPlayerApp {
                                 base,
                                 start_time: qplayer_core::Timespan::ZERO,
                                 duration: qplayer_core::Timespan::ZERO,
+                            },
+                            CueType::Osc => qplayer_core::Cue::Osc {
+                                base,
+                                command: String::new(),
                             },
                         };
                         state.show_file.cues.push(cue);

@@ -42,6 +42,9 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
             if ui.button("+ Dummy").clicked() {
                 queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Dummy });
             }
+            if ui.button("+ OSC").clicked() {
+                queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Osc });
+            }
         });
         ui.separator();
     }
@@ -317,6 +320,7 @@ fn cue_type_label(cue: &Cue) -> &'static str {
         Cue::Volume { .. } => "VOL",
         Cue::Dummy { .. } => "DUM",
         Cue::TimeCode { .. } => "TC",
+        Cue::Osc { .. } => "OSC",
     }
 }
 

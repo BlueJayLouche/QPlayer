@@ -160,6 +160,14 @@ pub enum Cue {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         eq: Option<crate::EQSettings>,
     },
+
+    #[serde(rename = "OSCCue")]
+    Osc {
+        #[serde(flatten)]
+        base: CueBase,
+        #[serde(default)]
+        command: String,
+    },
 }
 
 // Convenience type aliases for pattern matching ergonomics.
@@ -170,6 +178,7 @@ pub type TimeCodeCue = Cue;
 pub type StopCue = Cue;
 pub type VolumeCue = Cue;
 pub type VideoCue = Cue;
+pub type OscCue = Cue;
 
 impl Cue {
     /// Access the shared base fields of any cue variant.
@@ -182,6 +191,7 @@ impl Cue {
             Cue::Stop { base, .. } => base,
             Cue::Volume { base, .. } => base,
             Cue::Video { base, .. } => base,
+            Cue::Osc { base, .. } => base,
         }
     }
 
@@ -195,6 +205,7 @@ impl Cue {
             Cue::Stop { base, .. } => base,
             Cue::Volume { base, .. } => base,
             Cue::Video { base, .. } => base,
+            Cue::Osc { base, .. } => base,
         }
     }
 
@@ -347,6 +358,24 @@ mod tests {
             }
             other => panic!("expected SoundCue, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_osc_cue_serde() {
+        let cue = Cue::Osc {
+            base: CueBase {
+                qid: Decimal::from(7),
+                name: "OSC Go".into(),
+                ..Default::default()
+            },
+            command: "/qplayer/go,5".into(),
+        };
+        let json = serde_json::to_string(&cue).unwrap();
+        let de: Cue = serde_json::from_str(&json).unwrap();
+        assert_eq!(cue, de);
+        let val = serde_json::to_value(&cue).unwrap();
+        assert_eq!(val["$type"], "OSCCue");
+        assert_eq!(val["command"], "/qplayer/go,5");
     }
 
     #[test]

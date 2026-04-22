@@ -176,7 +176,7 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                 }
             });
             if let Some((Some(ref peaks), _)) = waveform_data {
-                let (new_zoom, new_scroll) = crate::waveform::draw(ui, peaks, waveform_zoom, waveform_scroll);
+                let (new_zoom, new_scroll) = crate::waveform::draw(ui, peaks, waveform_zoom, waveform_scroll, 48.0);
                 waveform_zoom = new_zoom;
                 waveform_scroll = new_scroll;
             } else if let Some((None, true)) = waveform_data {
@@ -237,7 +237,7 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                 }
             });
             if let Some((Some(ref peaks), _)) = waveform_data {
-                let (new_zoom, new_scroll) = crate::waveform::draw(ui, peaks, waveform_zoom, waveform_scroll);
+                let (new_zoom, new_scroll) = crate::waveform::draw(ui, peaks, waveform_zoom, waveform_scroll, 48.0);
                 waveform_zoom = new_zoom;
                 waveform_scroll = new_scroll;
             } else if let Some((None, true)) = waveform_data {
@@ -347,6 +347,15 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                     *duration = qplayer_core::Timespan::from_secs_f64(secs);
                     changed = true;
                 }
+            });
+        }
+        qplayer_core::Cue::Osc { command, .. } => {
+            ui.label(RichText::new("OSC Cue").monospace().size(12.0));
+            ui.label("Command format: /address,arg1,arg2,…");
+            ui.horizontal(|ui| {
+                ui.label("Command:");
+                let response = ui.text_edit_singleline(command);
+                changed |= response.changed();
             });
         }
     }

@@ -488,6 +488,20 @@ impl App {
                 log::info!("Go VolumeCue -> adjust Q{} to {:.1} dB", sound_qid, 20.0 * volume.log10());
                 self.handle_volume_cue(*sound_qid, *volume, *fade_time, *fade_type);
             }
+            qplayer_core::Cue::Osc { command, .. } => {
+                log::info!("Go OSCCue: {}", command);
+                if let Some(osc) = &self.osc_manager {
+                    if let Ok(msg) = parse_osc_command(command) {
+                        if let Err(e) = osc.send(msg) {
+                            log::error!("OSC send failed: {}", e);
+                        }
+                    } else {
+                        log::error!("Invalid OSC command: {}", command);
+                    }
+                } else {
+                    log::warn!("OSC manager not available, cannot send: {}", command);
+                }
+            }
             other => {
                 log::info!("Go on unsupported cue type: {:?}", std::mem::discriminant(other));
             }
@@ -1660,6 +1674,40 @@ fn emergency_save(state: &SharedStateHandle) {
     }
 }
 
+/// Parse an OSC command string like `/qplayer/go,5,hello` into an `OscMessage`.
+/// The first segment (before any comma) is the OSC address.
+/// Remaining segments are auto-typed arguments: int → float → string.
+fn parse_osc_command(command: &str) -> anyhow::Result<rosc::OscMessage> {
+    if command.is_empty() {
+        anyhow::bail!("Empty OSC command");
+    }
+    let parts: Vec<&str> = command.split(',').collect();
+    let addr = parts[0].trim().to_string();
+    if !addr.starts_with('/') {
+        anyhow::bail!("OSC address must start with /: {}", addr);
+    }
+    let mut args = Vec::new();
+    for part in &parts[1..] {
+        let s = part.trim();
+        if s.is_empty() {
+            continue;
+        }
+        // Try int first
+        if let Ok(i) = s.parse::<i32>() {
+            args.push(rosc::OscType::Int(i));
+            continue;
+        }
+        // Try float
+        if let Ok(f) = s.parse::<f32>() {
+            args.push(rosc::OscType::Float(f));
+            continue;
+        }
+        // Default to string
+        args.push(rosc::OscType::String(s.to_string()));
+    }
+    Ok(rosc::OscMessage { addr, args })
+}
+
 fn main() -> anyhow::Result<()> {
     // Single instance guard
     let single = single_instance::SingleInstance::new("QPlayer_rust_port").unwrap();
@@ -1737,4 +1785,38 @@ fn main() -> anyhow::Result<()> {
     app.autosave_running.store(false, Ordering::Relaxed);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_osc_command_address_only() {
+        let msg = parse_osc_command("/qplayer/go").unwrap();
+        assert_eq!(msg.addr, "/qplayer/go");
+        assert!(msg.args.is_empty());
+    }
+
+    #[test]
+    fn test_parse_osc_command_with_args() {
+        let msg = parse_osc_command("/qplayer/go,5,3.14,hello").unwrap();
+        assert_eq!(msg.addr, "/qplayer/go");
+        assert_eq!(msg.args.len(), 3);
+        assert_eq!(msg.args[0], rosc::OscType::Int(5));
+        assert_eq!(msg.args[1], rosc::OscType::Float(3.14));
+        assert_eq!(msg.args[2], rosc::OscType::String("hello".into()));
+    }
+
+    #[test]
+    fn test_parse_osc_command_invalid_address() {
+        let err = parse_osc_command("qplayer/go");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_parse_osc_command_empty() {
+        let err = parse_osc_command("");
+        assert!(err.is_err());
+    }
 }
