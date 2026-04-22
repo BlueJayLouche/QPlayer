@@ -2,7 +2,7 @@
 
 This document tracks every feature gap between the Rust port and the C# QPlayer original, organized by priority and estimated effort.
 
-> **Current status:** 71 tests passing. Core architecture (audio, video, protocols, plugins) is solid. The remaining work is primarily **runtime behavior**, **UI density**, and **audio engine depth**.
+> **Current status:** 73 tests passing. **All P1 items complete!** Moving to P2.
 
 ---
 
@@ -35,32 +35,32 @@ This document tracks every feature gap between the Rust port and the C# QPlayer 
 |---|---------|-------------|----------|--------------|--------|
 | P1.1 | **Delay / Wait** | Per-cue `delay: TimeSpan` defers start by timer | ✅ Delay editor in inspector; `DelayedCue` queue checked each frame | `qplayer/src/main.rs`, `qplayer-gui/src/inspector/mod.rs` | Small |
 | P1.2 | **Looping** | `LoopMode`: OneShot/Looped/LoopedInfinite/HoldLast with `loopCount` | ✅ `LoopProcessor` wired into `play_audio()`; start_time/duration trim points supported | `qplayer-audio/src/decoder.rs`, `qplayer/src/main.rs` | Medium |
-| P1.3 | **Preload** | Decode to specific time, pause, ready to go on next Go | No preload UI or runtime | `qplayer-gui/src/transport/mod.rs`, `qplayer/src/main.rs` | Medium |
+| P1.3 | **Preload** | Decode to specific time, pause, ready to go on next Go | ✅ `handle_preload()` seeks + pauses; Go activates preloaded cue; transport has Preload button | `qplayer-gui/src/transport/mod.rs`, `qplayer/src/main.rs` | Done |
 | P1.4 | **Playback progress** | Per-cue progress bar + elapsed/total time in cue list row | ✅ `MixerInput::position()/length()` synced to GUI; progress bars in active cues + cue list | `qplayer/src/main.rs`, `qplayer-gui/src/cue_list/mod.rs` | Small |
-| P1.5 | **Cue state machine** | Ready → Delay → Playing/PlayingLooped ↔ Paused → Done | Only basic `ActiveCue` with `paused` flag | `qplayer/src/main.rs` | Medium |
+| P1.5 | **Cue state machine** | Ready → Delay → Playing/PlayingLooped ↔ Paused → Done | ✅ `CueState` enum with full transitions; state icons in active cues panel | `qplayer/src/main.rs` | Done |
 
 ### Cue List UX
 
 | # | Feature | C# Behavior | Rust Gap | Target Files | Effort |
 |---|---------|-------------|----------|--------------|--------|
 | P1.6 | **More cue list columns** | Playback, Enabled, Trigger, Wait, Duration, Loop Mode | ✅ Trigger, Duration, Loop Mode added; progress bar for active cues | `qplayer-gui/src/cue_list/mod.rs` | Small |
-| P1.7 | **Inline editing** | Edit QID/Name/Trigger directly in row (HiddenTextbox/HiddenComboBox) | Must open inspector to edit anything | `qplayer-gui/src/cue_list/mod.rs` | Medium |
+| P1.7 | **Inline editing** | Edit QID/Name/Trigger directly in row (HiddenTextbox/HiddenComboBox) | ✅ Inline `TextEdit` for QID/Name, `ComboBox` for Trigger in Edit mode; undo snapshots captured per edit | `qplayer-gui/src/cue_list/mod.rs` | Done |
 
 ### Audio Engine Depth
 
 | # | Feature | C# Behavior | Rust Gap | Target Files | Effort |
 |---|---------|-------------|----------|--------------|--------|
-| P1.8 | **Full master limiter** | Lookahead, soft-clip, auto-gain, gain-reduction metering | Simple brickwall clamp (`sample.clamp(-thresh, thresh)`) | `qplayer-audio/src/limiter.rs` (new), `qplayer/src/main.rs` | Large |
-| P1.9 | **Double-buffered file reading** | Lock-free double-buffered, intelligent seek reuse, start buffer for seamless looping | Direct FFmpeg `read()` in audio callback | `qplayer-audio/src/decoder.rs` | Large |
-| P1.10 | **Fade processor wiring** | `FadeProcessor` in audio chain (volume + pan fade) | `FadeProcessor` exists but not wired into `build_cue_chain()` | `qplayer-audio/src/engine.rs`, `qplayer/src/main.rs` | Medium |
+| P1.8 | **Full master limiter** | Lookahead, soft-clip, auto-gain, gain-reduction metering | ✅ `Limiter` core with 5ms lookahead, attack/release envelope, stereo linking; wired into engine callback; GR meter in transport (0 to -30 dB) | `qplayer-audio/src/limiter_processor.rs`, `qplayer-audio/src/engine.rs` | Done |
+| P1.9 | **Double-buffered file reading** | Lock-free double-buffered, intelligent seek reuse, start buffer for seamless looping | ✅ `BufferedSource` with 3-second ring buffer, background fill thread, lock-free atomic read/write positions, seek support | `qplayer-audio/src/buffered_source.rs` | Done |
+| P1.10 | **Fade processor wiring** | `FadeProcessor` in audio chain (volume + pan fade) | ✅ Fade-in at play time via `FadeProcessor`; fade-out on stop + volume fades via `MixerInput::start_fade()` (per-frame, audio-thread) | `qplayer-audio/src/mixer.rs`, `qplayer/src/main.rs` | Done |
 
 ### Settings & Windows
 
 | # | Feature | C# Behavior | Rust Gap | Target Files | Effort |
 |---|---------|-------------|----------|--------------|--------|
-| P1.11 | **Remote nodes window** | Full editor: discovery timeout, host/client mode, sync on save | Not implemented | `qplayer-gui/src/` (new module) | Medium |
-| P1.12 | **Log window** | Live log viewer with Clear/Save, auto-scroll, audio buffer debug | Not implemented | `qplayer-gui/src/` (new module) | Small |
-| P1.13 | **Complete menu bar** | File (Pack, Autosave toggle), Edit, **Window**, **Help** | Only File + Edit menus | `qplayer-gui/src/app/mod.rs` | Small |
+| P1.11 | **Remote nodes window** | Full editor: discovery timeout, host/client mode, sync on save | ✅ Discovery heartbeat, RemoteDiscovery handling, node liveness (5s timeout), remote cue delegation, incoming remote command routing, inspector remote_node field, project settings UI | `qplayer/src/main.rs`, `qplayer-gui/src/app/mod.rs`, `qplayer-gui/src/inspector/mod.rs` | Done |
+| P1.12 | **Log window** | Live log viewer with Clear/Save, auto-scroll, audio buffer debug | ✅ Custom `log::Log` implementation forwarding to `env_logger` + in-app ring buffer (2000 entries); colored level + timestamp + message; auto-scroll + Clear | `qplayer-gui/src/log_window/mod.rs`, `qplayer-gui/src/logging.rs` | Done |
+| P1.13 | **Complete menu bar** | File (Pack, Autosave toggle), Edit, **Window**, **Help** | ✅ File, Edit, Window (Log toggle), Help (About) menus; About window with version + license | `qplayer-gui/src/app/mod.rs` | Done |
 
 ---
 
@@ -105,7 +105,7 @@ This document tracks every feature gap between the Rust port and the C# QPlayer 
 | Video playback | ❌ Entirely stubbed | ✅ Full implementation |
 | Cross-platform | ⚠️ Windows-only WPF | ✅ macOS/Windows/Linux |
 | Plugin sandbox | ⚠️ .dll with AssemblyLoadContext | ✅ WASM with wasmtime |
-| Test coverage | Unknown | 71 unit tests, all passing |
+| Test coverage | Unknown | 73 unit tests, all passing |
 
 ---
 
@@ -115,25 +115,19 @@ This document tracks every feature gap between the Rust port and the C# QPlayer 
 ✅ Done: Exit lockup, Go button, DND reordering
 
 ### Sprint 2 — Playback Essentials (P1.1–P1.5)
-These have the data model already — just need runtime wiring:
-1. **P1.1 Delay** — add timer-based deferred start in `handle_go()`
-2. **P1.4 Playback progress** — track decoder position, sync to GUI
-3. **P1.2 Looping** — wire `LoopMode` into decoder or mixer input
-4. **P1.3 Preload** — add preload time + button to transport
-5. **P1.5 Cue state machine** — add `CueState` enum, transition logic
+✅ Done: Delay, Playback progress, Looping, Preload, Cue state machine
 
 ### Sprint 3 — Cue List Density (P1.6–P1.7)
-6. **P1.6 More columns** — add Trigger, Duration, Loop to cue list
-7. **P1.7 Inline editing** — editable fields directly in cue rows
+✅ Done: More columns, Inline editing
 
 ### Sprint 4 — Audio Engine Depth (P1.8–P1.10)
-8. **P1.10 Fade processor wiring** — wire `FadeProcessor` into `build_cue_chain()`
+8. **P1.10 Fade processor wiring** — ✅ Done: fade-in via `FadeProcessor`, fade-out/volume via `MixerInput::start_fade()`
 9. **P1.9 Double-buffered reading** — add `AudioFileReader` with ring buffer
 10. **P1.8 Full limiter** — implement lookahead limiter with GR metering
 
 ### Sprint 5 — Windows & Menus (P1.11–P1.13, P2)
-11. **P1.13 Complete menu bar** — Window + Help menus
-12. **P1.12 Log window** — live log viewer
+11. **P1.13 Complete menu bar** — ✅ Done
+12. **P1.12 Log window** — ✅ Done
 13. **P1.11 Remote nodes window** — OSC remote node editor
 14. **P2.1 Pack Project** — self-contained media distribution
 

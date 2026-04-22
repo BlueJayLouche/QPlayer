@@ -33,6 +33,14 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
             }
         }
 
+        let preload_btn = Button::new(RichText::new("PRELOAD"))
+            .min_size(Vec2::new(70.0, 32.0));
+        if ui.add(preload_btn).clicked() {
+            if let Ok(mut state) = state.lock() {
+                state.command_queue.push(AppCommand::Preload);
+            }
+        }
+
         ui.separator();
 
         // Show / Edit mode toggle
@@ -79,7 +87,7 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
 fn draw_meter(ui: &mut egui::Ui, data: &GuiMeterData) {
     let width = 8.0;
     let height = 32.0;
-    let gap = 4.0;
+    let _gap = 4.0;
 
     for &(peak_db, rms_db) in &[(data.peak_l_db, data.rms_l_db), (data.peak_r_db, data.rms_r_db)] {
         let (rect, _response) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
@@ -117,5 +125,31 @@ fn draw_meter(ui: &mut egui::Ui, data: &GuiMeterData) {
         }
     }
 
-    ui.add_space(gap);
+    // GR meter (gain reduction)
+    let (rect, _response) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 1.0, Color32::from_rgb(30, 30, 30));
+
+    let gr_segments = 12i32;
+    let seg_h = height / gr_segments as f32;
+    let gr_db = data.limiter_gr_db;
+    for i in 0..gr_segments {
+        let seg_db = -(i as f32 / gr_segments as f32) * 30.0; // 0 to -30 dB
+        let seg_y = rect.min.y + (i as f32 + 0.5) * seg_h;
+        let seg_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.center().x, seg_y),
+            egui::vec2(width - 2.0, seg_h - 1.0),
+        );
+        let lit = gr_db <= seg_db;
+        let colour = if seg_db <= -20.0 {
+            Color32::RED
+        } else if seg_db <= -10.0 {
+            Color32::YELLOW
+        } else {
+            Color32::from_rgb(100, 200, 255)
+        };
+        if lit {
+            painter.rect_filled(seg_rect, 1.0, colour);
+        }
+    }
 }

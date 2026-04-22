@@ -129,6 +129,11 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
         }
     });
     ui.horizontal(|ui| {
+        ui.label("Remote Node:");
+        let response = ui.text_edit_singleline(&mut base.remote_node);
+        changed |= response.changed();
+    });
+    ui.horizontal(|ui| {
         ui.label("Loop:");
         egui::ComboBox::from_id_salt("loop_mode")
             .selected_text(format!("{:?}", base.loop_mode))

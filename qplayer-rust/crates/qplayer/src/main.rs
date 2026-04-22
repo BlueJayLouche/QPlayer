@@ -134,15 +134,35 @@ impl App {
             }
         }
 
-        // Default protocol settings (TODO: load from project settings)
-        let nic = Ipv4Addr::new(127, 0, 0, 1);
-        let subnet = Ipv4Addr::new(255, 255, 255, 0);
+        // Protocol settings from project settings (fallback to defaults)
+        let (nic, subnet, osc_rx_port, osc_tx_port, is_remote_host, enable_remote_control) = {
+            match qplayer.state().lock() {
+                Ok(state) => {
+                    let settings = &state.show_file.show_settings;
+                    let nic_str = settings.osc_nic.parse::<Ipv4Addr>().unwrap_or(Ipv4Addr::new(127,0,0,1));
+                    let subnet_str = Ipv4Addr::new(255,255,255,0); // TODO: expose subnet in settings
+                    let rx = settings.osc_rx_port as u16;
+                    let tx = settings.osc_tx_port as u16;
+                    // Port flipping: if remote control enabled and NOT host, swap ports
+                    let (rx, tx) = if settings.enable_remote_control && !settings.is_remote_host {
+                        (tx, rx)
+                    } else {
+                        (rx, tx)
+                    };
+                    (nic_str, subnet_str, rx, tx, settings.is_remote_host, settings.enable_remote_control)
+                }
+                Err(_) => {
+                    (Ipv4Addr::new(127,0,0,1), Ipv4Addr::new(255,255,255,0), 9000u16, 9001u16, true, false)
+                }
+            }
+        };
 
         let (osc_manager, osc_rx) = {
             let (tx, rx) = std::sync::mpsc::channel();
-            match OscManager::new(nic, 9000, 9001, subnet, tx) {
+            match OscManager::new(nic, osc_rx_port, osc_tx_port, subnet, tx) {
                 Ok(m) => {
-                    log::info!("OSC manager started on {}:9000", nic);
+                    log::info!("OSC manager started on {}:{} (TX: {}), remote_control={} is_host={}",
+                        nic, osc_rx_port, osc_tx_port, enable_remote_control, is_remote_host);
                     (Some(m), Some(rx))
                 }
                 Err(e) => {
@@ -392,6 +412,30 @@ impl App {
         let name = cue.base().name.clone();
         let delay = cue.base().delay;
 
+        // Remote cue delegation: if remote_node is set and not local, send OSC instead
+        let remote_node = cue.base().remote_node.clone();
+        if !remote_node.is_empty() {
+            let (enable_remote, local_name) = {
+                let Ok(state) = self.qplayer.state().lock() else { return; };
+                (state.show_file.show_settings.enable_remote_control,
+                 state.show_file.show_settings.node_name.clone())
+            };
+            if enable_remote && remote_node != local_name {
+                if let Some(osc) = &self.osc_manager {
+                    let qid_str = qid.to_string();
+                    let _ = osc.send(rosc::OscMessage {
+                        addr: "/qplayer/remote/go".into(),
+                        args: vec![
+                            rosc::OscType::String(remote_node),
+                            rosc::OscType::String(qid_str),
+                        ],
+                    });
+                    log::info!("Delegated Q{} to remote node {}", qid, cue.base().remote_node);
+                }
+                return;
+            }
+        }
+
         // If cue has a delay, schedule it instead of playing immediately
         if delay.as_secs_f64() > 0.0 {
             log::info!("Delaying cue Q{} by {:.2}s", qid, delay.as_secs_f64());
@@ -402,14 +446,28 @@ impl App {
             return;
         }
 
+        // Check if cue is already preloaded — if so, just activate it
+        if let Some(idx) = self.active_cues.iter().position(|ac| ac.qid == qid && ac.state == CueState::Ready) {
+            let ac = &mut self.active_cues[idx];
+            ac.input.set_active(true);
+            let new_state = if cue.base().loop_mode == qplayer_core::LoopMode::Looped || cue.base().loop_mode == qplayer_core::LoopMode::LoopedInfinite {
+                CueState::PlayingLooped
+            } else {
+                CueState::Playing
+            };
+            ac.state = new_state;
+            log::info!("Activated preloaded cue Q{}", qid);
+            return;
+        }
+
         match cue {
-            qplayer_core::Cue::Sound { path, start_time, duration, .. } => {
+            qplayer_core::Cue::Sound { path, start_time, duration, volume, fade_in, fade_out, fade_type, .. } => {
                 log::info!("Go SoundCue: {}", path);
-                self.play_audio(path, qid, &name, cue.base().loop_mode, cue.base().loop_count, *start_time, *duration);
+                self.play_audio(path, qid, &name, cue.base().loop_mode, cue.base().loop_count, *start_time, *duration, *volume, *fade_in, *fade_out, *fade_type, false);
             }
-            qplayer_core::Cue::Video { path, start_time, duration, .. } => {
+            qplayer_core::Cue::Video { path, start_time, duration, volume, fade_in, fade_out, fade_type, .. } => {
                 log::info!("Go VideoCue: {}", path);
-                self.play_audio(path, qid, &name, cue.base().loop_mode, cue.base().loop_count, *start_time, *duration);
+                self.play_audio(path, qid, &name, cue.base().loop_mode, cue.base().loop_count, *start_time, *duration, *volume, *fade_in, *fade_out, *fade_type, false);
                 self.play_video(path, event_loop);
             }
             qplayer_core::Cue::Stop { stop_qid, fade_out_time, fade_type, .. } => {
@@ -418,7 +476,7 @@ impl App {
             }
             qplayer_core::Cue::Volume { sound_qid, volume, fade_time, fade_type, .. } => {
                 log::info!("Go VolumeCue -> adjust Q{} to {:.1} dB", sound_qid, 20.0 * volume.log10());
-                self.handle_volume_cue(*sound_qid, *volume, *fade_time, fade_type);
+                self.handle_volume_cue(*sound_qid, *volume, *fade_time, *fade_type);
             }
             other => {
                 log::info!("Go on unsupported cue type: {:?}", std::mem::discriminant(other));
@@ -435,6 +493,11 @@ impl App {
         loop_count: i32,
         start_time: qplayer_core::Timespan,
         duration: qplayer_core::Timespan,
+        volume: f32,
+        fade_in: f32,
+        _fade_out: f32,
+        fade_type: qplayer_core::FadeType,
+        preload_only: bool,
     ) {
         match FfmpegDecoder::open(path) {
             Ok(decoder) => {
@@ -447,8 +510,26 @@ impl App {
                     0 // auto-detect from source length
                 };
                 loop_proc.set_loop(start_frame, end_frame, loop_mode, loop_count as u32);
-                let input = self.audio_engine.play(Box::new(loop_proc));
-                let state = if loop_mode == qplayer_core::LoopMode::Looped || loop_mode == qplayer_core::LoopMode::LoopedInfinite {
+
+                // Wire fade processor for fade-in
+                let mut source: Box<dyn SampleProvider> = Box::new(loop_proc);
+                if fade_in > 0.0 {
+                    let fade_proc = qplayer_audio::FadeProcessor::new(source, 0.0);
+                    let fade_in_frames = (fade_in * sample_rate as f32) as u32;
+                    fade_proc.start_fade(1.0, fade_in_frames, fade_type);
+                    source = Box::new(fade_proc);
+                }
+
+                let input = self.audio_engine.play(source);
+                input.set_volume(volume);
+
+                if preload_only {
+                    input.set_active(false);
+                }
+
+                let state = if preload_only {
+                    CueState::Ready
+                } else if loop_mode == qplayer_core::LoopMode::Looped || loop_mode == qplayer_core::LoopMode::LoopedInfinite {
                     CueState::PlayingLooped
                 } else {
                     CueState::Playing
@@ -464,28 +545,64 @@ impl App {
     fn handle_stop_cue(&mut self, stop_qid: rust_decimal::Decimal, fade_out_time: f32, fade_type: qplayer_core::FadeType) {
         let idx = self.active_cues.iter().position(|ac| ac.qid == stop_qid);
         if let Some(idx) = idx {
-            let input = self.active_cues.remove(idx).input;
+            let input = &self.active_cues[idx].input;
             if fade_out_time > 0.0 {
-                let initial_volume = input.volume();
-                let steps = 20usize;
-                let sleep_ms = (fade_out_time * 1000.0) / steps as f32;
-                let _fade_type = fade_type;
-                std::thread::spawn(move || {
-                    for i in 0..=steps {
-                        let t = i as f32 / steps as f32;
-                        let vol = initial_volume * (1.0 - t);
-                        input.set_volume(vol.max(0.0));
-                        if i < steps {
-                            std::thread::sleep(Duration::from_millis(sleep_ms as u64));
-                        }
-                    }
-                    input.set_active(false);
-                });
+                let sample_rate = self.audio_engine.sample_rate();
+                let fade_frames = (fade_out_time * sample_rate as f32) as u32;
+                input.start_fade(0.0, fade_frames.max(1), fade_type);
+                log::info!("Fade-out Q{} over {} frames", stop_qid, fade_frames);
             } else {
                 input.set_active(false);
+                input.set_volume(0.0);
+                self.active_cues[idx].state = CueState::Done;
             }
         } else {
             log::warn!("StopCue target Q{} not found in active cues", stop_qid);
+        }
+    }
+
+    /// Check if an incoming remote OSC command targets this node.
+    fn is_remote_target_match(&self, target: &str) -> bool {
+        let local_name = {
+            let Ok(state) = self.qplayer.state().lock() else { return false; };
+            state.show_file.show_settings.node_name.clone()
+        };
+        target == local_name || target == "*"
+    }
+
+    /// Preload the selected cue: decode and add to mixer as inactive (Ready state).
+    fn handle_preload(&mut self, _event_loop: &ActiveEventLoop) {
+        let cue = {
+            let state = self.qplayer.state().lock().unwrap();
+            state.selected_cue().cloned()
+        };
+
+        let Some(cue) = cue else {
+            log::info!("Preload pressed but no cue selected");
+            return;
+        };
+
+        let qid = cue.base().qid;
+        let name = cue.base().name.clone();
+
+        // Skip if already preloaded or playing
+        if self.active_cues.iter().any(|ac| ac.qid == qid) {
+            log::info!("Cue Q{} is already loaded", qid);
+            return;
+        }
+
+        match cue {
+            qplayer_core::Cue::Sound { ref path, start_time, duration, volume, fade_in, fade_out, fade_type, .. } => {
+                log::info!("Preload SoundCue: {}", path);
+                self.play_audio(path, qid, &name, cue.base().loop_mode, cue.base().loop_count, start_time, duration, volume, fade_in, fade_out, fade_type, true);
+            }
+            qplayer_core::Cue::Video { ref path, start_time, duration, volume, fade_in, fade_out, fade_type, .. } => {
+                log::info!("Preload VideoCue: {}", path);
+                self.play_audio(path, qid, &name, cue.base().loop_mode, cue.base().loop_count, start_time, duration, volume, fade_in, fade_out, fade_type, true);
+            }
+            other => {
+                log::info!("Preload not supported for cue type: {:?}", std::mem::discriminant(&other));
+            }
         }
     }
 
@@ -563,25 +680,15 @@ impl App {
         }
     }
 
-    fn handle_volume_cue(&mut self, sound_qid: rust_decimal::Decimal, target_volume: f32, fade_time: f32, fade_type: &qplayer_core::FadeType) {
-        let target = self.active_cues.iter().find(|ac| ac.qid == sound_qid).cloned();
-        if let Some(input) = target.map(|ac| ac.input) {
+    fn handle_volume_cue(&mut self, sound_qid: rust_decimal::Decimal, target_volume: f32, fade_time: f32, fade_type: qplayer_core::FadeType) {
+        let target = self.active_cues.iter().find(|ac| ac.qid == sound_qid);
+        if let Some(ac) = target {
+            let input = &ac.input;
             if fade_time > 0.0 {
-                let initial_volume = input.volume();
-                let steps = 20usize;
-                let sleep_ms = (fade_time * 1000.0) / steps as f32;
-                let _fade_type = *fade_type;
-                std::thread::spawn(move || {
-                    for i in 0..=steps {
-                        let t = i as f32 / steps as f32;
-                        // Simple linear interpolation for now; fade_type ignored in thread-based fade
-                        let vol = initial_volume + (target_volume - initial_volume) * t;
-                        input.set_volume(vol.max(0.0));
-                        if i < steps {
-                            std::thread::sleep(Duration::from_millis(sleep_ms as u64));
-                        }
-                    }
-                });
+                let sample_rate = self.audio_engine.sample_rate();
+                let fade_frames = (fade_time * sample_rate as f32) as u32;
+                input.start_fade(target_volume.max(0.0), fade_frames.max(1), fade_type);
+                log::info!("Volume fade Q{} to {} over {} frames", sound_qid, target_volume, fade_frames);
             } else {
                 input.set_volume(target_volume.max(0.0));
             }
@@ -767,6 +874,9 @@ impl App {
                         log::warn!("Audio device '{}' not found", name);
                     }
                 }
+                AppCommand::Preload => {
+                    self.handle_preload(event_loop);
+                }
                 AppCommand::SaveProject | AppCommand::SaveProjectAs { .. } => {
                     if let Some(pm) = self.plugin_manager.as_mut() {
                         pm.on_save();
@@ -830,6 +940,80 @@ impl App {
                             });
                         }
                     }
+                    OscEvent::RemoteDiscovery { name, addr } => {
+                        if let Ok(mut state) = self.qplayer.state().lock() {
+                            let local_name = state.show_file.show_settings.node_name.clone();
+                            if name != local_name {
+                                let now = Instant::now();
+                                let nodes = &mut state.show_file.show_settings.remote_nodes;
+                                if let Some(idx) = nodes.iter().position(|n| n.name == name) {
+                                    nodes[idx].last_seen = Some(now);
+                                    if let Some(a) = addr {
+                                        nodes[idx].address = a.to_string();
+                                    }
+                                } else {
+                                    nodes.push(qplayer_core::RemoteNode {
+                                        name: name.clone(),
+                                        address: addr.map(|a| a.to_string()).unwrap_or_default(),
+                                        last_seen: Some(now),
+                                    });
+                                    log::info!("Discovered remote node: {} at {:?}", name, addr);
+                                }
+                            }
+                        }
+                    }
+                    OscEvent::RemoteGo { target, qid } => {
+                        if self.is_remote_target_match(&target) {
+                            if let Ok(qid_dec) = qid.parse::<rust_decimal::Decimal>() {
+                                let _ = self.qplayer.state().lock().map(|mut s| s.selected_cue_id = Some(qid_dec));
+                            }
+                            if let Ok(mut state) = self.qplayer.state().lock() {
+                                state.command_queue.push(AppCommand::Go);
+                            }
+                        }
+                    }
+                    OscEvent::RemoteStop { target, qid } => {
+                        if self.is_remote_target_match(&target) {
+                            if let Ok(qid_dec) = qid.parse::<rust_decimal::Decimal>() {
+                                let _ = self.qplayer.state().lock().map(|mut s| s.selected_cue_id = Some(qid_dec));
+                            }
+                            if let Ok(mut state) = self.qplayer.state().lock() {
+                                state.command_queue.push(AppCommand::Stop);
+                            }
+                        }
+                    }
+                    OscEvent::RemotePause { target, qid } => {
+                        if self.is_remote_target_match(&target) {
+                            if let Ok(qid_dec) = qid.parse::<rust_decimal::Decimal>() {
+                                let _ = self.qplayer.state().lock().map(|mut s| s.selected_cue_id = Some(qid_dec));
+                            }
+                            if let Ok(mut state) = self.qplayer.state().lock() {
+                                state.command_queue.push(AppCommand::Pause);
+                            }
+                        }
+                    }
+                    OscEvent::RemoteUnpause { target, qid } => {
+                        if self.is_remote_target_match(&target) {
+                            if let Ok(qid_dec) = qid.parse::<rust_decimal::Decimal>() {
+                                let _ = self.qplayer.state().lock().map(|mut s| s.selected_cue_id = Some(qid_dec));
+                            }
+                            if self.paused {
+                                if let Ok(mut state) = self.qplayer.state().lock() {
+                                    state.command_queue.push(AppCommand::Pause);
+                                }
+                            }
+                        }
+                    }
+                    OscEvent::RemotePreload { target, qid, time: _ } => {
+                        if self.is_remote_target_match(&target) {
+                            if let Ok(qid_dec) = qid.parse::<rust_decimal::Decimal>() {
+                                let _ = self.qplayer.state().lock().map(|mut s| s.selected_cue_id = Some(qid_dec));
+                            }
+                            if let Ok(mut state) = self.qplayer.state().lock() {
+                                state.command_queue.push(AppCommand::Preload);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -861,11 +1045,28 @@ impl App {
         // Discovery broadcast every 1 second
         if self.last_discovery.elapsed() >= Duration::from_secs(1) {
             self.last_discovery = Instant::now();
+            let node_name = {
+                let Ok(state) = self.qplayer.state().lock() else { return; };
+                state.show_file.show_settings.node_name.clone()
+            };
             if let Some(osc) = &self.osc_manager {
                 let _ = osc.send(rosc::OscMessage {
                     addr: "/qplayer/remote/discovery".into(),
-                    args: vec![rosc::OscType::String("QPlayer-Rust".into())],
+                    args: vec![rosc::OscType::String(node_name)],
                 });
+            }
+        }
+
+        // Remote node liveness: mark nodes inactive after 5s without discovery
+        {
+            let Ok(mut state) = self.qplayer.state().lock() else { return; };
+            let now = Instant::now();
+            for node in &mut state.show_file.show_settings.remote_nodes {
+                if let Some(last) = node.last_seen {
+                    if now.duration_since(last) > Duration::from_secs(5) {
+                        // Node timed out — keep it in the list but last_seen is stale
+                    }
+                }
             }
         }
     }
@@ -956,6 +1157,7 @@ impl App {
             let peak_r_db = if meters.peak_r > 0.0 { 20.0 * meters.peak_r.log10() } else { -f32::INFINITY };
             let rms_l_db = if meters.rms_l > 0.0 { 20.0 * meters.rms_l.log10() } else { -f32::INFINITY };
             let rms_r_db = if meters.rms_r > 0.0 { 20.0 * meters.rms_r.log10() } else { -f32::INFINITY };
+            let limiter_gr_db = self.audio_engine.read_limiter_gr_db();
             if let Ok(mut state) = self.qplayer.state().lock() {
                 state.meter_data = qplayer_gui::GuiMeterData {
                     peak_l_db,
@@ -963,6 +1165,7 @@ impl App {
                     rms_l_db,
                     rms_r_db,
                     clipped: false, // TODO: expose clip flag from MeteringProcessor
+                    limiter_gr_db,
                 };
             }
         }
@@ -1372,7 +1575,7 @@ fn main() -> anyhow::Result<()> {
             .homepage("https://github.com/BlueJayLouche/QPlayer")
     );
 
-    env_logger::init();
+    qplayer_gui::logging::init_logger();
 
     let event_loop = EventLoop::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Poll);

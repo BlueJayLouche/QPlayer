@@ -3,7 +3,9 @@
 //! Replaces C# `AudioPlaybackManager`. Owns the cpal stream,
 //! the master mixer, and all active playback channels.
 
+use crate::buffered_source::BufferedSource;
 use crate::channel_converter::MonoToStereo;
+use crate::limiter_processor::Limiter;
 use crate::metering_processor::{MeterData, MeteringProcessor};
 use crate::mixer::{Mixer, MixerInput};
 use crate::resampler::ResamplerProcessor;
@@ -23,6 +25,8 @@ pub struct AudioEngine {
     limiter_threshold: AtomicF32,
     /// Master metering (peak/RMS).
     metering: Arc<MeteringProcessor>,
+    /// Master limiter core (lives in the audio callback).
+    limiter: std::sync::Mutex<Limiter>,
 }
 
 /// Simple atomic f32 using `to_bits`/`from_bits`.
@@ -82,15 +86,18 @@ impl AudioEngine {
 
         let limiter_threshold = AtomicF32::new(0.95);
         let limiter_thresh_clone = AtomicF32::new(limiter_threshold.load(std::sync::atomic::Ordering::Relaxed));
+        let limiter = std::sync::Mutex::new(Limiter::new(0.95, sample_rate, channels));
+        let limiter_clone = std::sync::Mutex::new(Limiter::new(0.95, sample_rate, channels));
 
         let stream = device.build_output_stream(
             &config,
             move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
                 mixer_clone.render(data);
-                // Master brickwall limiter
+                // Master lookahead limiter
                 let thresh = limiter_thresh_clone.load(std::sync::atomic::Ordering::Relaxed);
-                for sample in data.iter_mut() {
-                    *sample = sample.clamp(-thresh, thresh);
+                if let Ok(mut lim) = limiter_clone.lock() {
+                    lim.threshold = thresh.clamp(0.01, 1.0);
+                    lim.process(data);
                 }
                 // Master metering
                 metering_clone.read(data);
@@ -119,6 +126,7 @@ impl AudioEngine {
             channels,
             limiter_threshold,
             metering,
+            limiter,
         })
     }
 
@@ -148,6 +156,15 @@ impl AudioEngine {
         self.metering.read_meters()
     }
 
+    /// Read current limiter gain reduction in dB (0 = no reduction, negative = active).
+    pub fn read_limiter_gr_db(&self) -> f32 {
+        if let Ok(lim) = self.limiter.lock() {
+            lim.gr_db
+        } else {
+            0.0
+        }
+    }
+
     /// Play a sound by adding it to the mixer.
     ///
     /// Automatically inserts a resampler if the source sample rate differs
@@ -167,6 +184,9 @@ impl AudioEngine {
         if source.channels() == 1 && self.channels == 2 {
             source = Box::new(MonoToStereo::new(source));
         }
+
+        // Double-buffer the source to decode file I/O on a background thread
+        let source = Box::new(BufferedSource::new(source));
 
         let max_buffer = self.sample_rate as usize * self.channels as usize; // 1 second
         let input = Arc::new(MixerInput::new(source, max_buffer));

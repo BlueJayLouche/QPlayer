@@ -176,6 +176,8 @@ pub struct RemoteNode {
     pub name: String,
     #[serde(default)]
     pub address: String,
+    #[serde(skip)]
+    pub last_seen: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

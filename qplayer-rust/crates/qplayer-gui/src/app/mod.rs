@@ -133,6 +133,8 @@ pub struct GuiMeterData {
     pub rms_l_db: f32,
     pub rms_r_db: f32,
     pub clipped: bool,
+    /// Master limiter gain reduction in dB (0 = no reduction, negative = active).
+    pub limiter_gr_db: f32,
 }
 
 /// Central mutable state shared between GUI and audio/control threads.
@@ -159,6 +161,10 @@ pub struct SharedState {
     pub pending_waveforms: std::collections::HashSet<String>,
     /// Available audio output device names (populated at startup).
     pub audio_devices: Vec<String>,
+    /// Whether the log window is open.
+    pub show_log_window: bool,
+    /// Whether the About window is open.
+    pub show_about_window: bool,
 }
 
 impl Default for SharedState {
@@ -179,6 +185,8 @@ impl Default for SharedState {
             waveform_cache: std::collections::HashMap::new(),
             pending_waveforms: std::collections::HashSet::new(),
             audio_devices: Vec::new(),
+            show_log_window: false,
+            show_about_window: false,
         }
     }
 }
@@ -237,6 +245,10 @@ pub enum AppCommand {
     MoveCue { from_idx: usize, to_idx: usize },
     SetLimiterThreshold(f32),
     SetAudioDevice(String),
+    Preload,
+    UpdateCueQid { qid: Decimal, new_qid: Decimal },
+    UpdateCueName { qid: Decimal, name: String },
+    UpdateCueTrigger { qid: Decimal, trigger: qplayer_core::TriggerMode },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -489,10 +501,37 @@ impl QPlayerApp {
                                 settings_changed |= ui.add(egui::DragValue::new(&mut settings.osc_tx_port).speed(1)).changed();
                             });
                             settings_changed |= ui.checkbox(&mut settings.enable_remote_control, "Enable Remote Control").changed();
+                            settings_changed |= ui.checkbox(&mut settings.is_remote_host, "Is Remote Host").changed();
+                            settings_changed |= ui.checkbox(&mut settings.sync_show_file_on_save, "Sync Showfile On Save").changed();
                             ui.horizontal(|ui| {
                                 ui.label("Node Name:");
                                 settings_changed |= ui.text_edit_singleline(&mut settings.node_name).changed();
                             });
+
+                            // Detected remote nodes
+                            ui.separator();
+                            ui.label("Detected Remote Nodes:");
+                            let now = std::time::Instant::now();
+                            let mut to_remove = Vec::new();
+                            for (idx, node) in settings.remote_nodes.iter().enumerate() {
+                                let is_active = node.last_seen.map(|t| now.duration_since(t).as_secs_f64() < 5.0).unwrap_or(false);
+                                let color = if is_active {
+                                    egui::Color32::from_rgb(100, 220, 100)
+                                } else {
+                                    egui::Color32::from_rgb(220, 100, 100)
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(color, if is_active { "●" } else { "○" });
+                                    ui.label(format!("{} @ {}", node.name, node.address));
+                                    if ui.button("×").clicked() {
+                                        to_remove.push(idx);
+                                    }
+                                });
+                            }
+                            for idx in to_remove.into_iter().rev() {
+                                settings.remote_nodes.remove(idx);
+                                settings_changed = true;
+                            }
                         });
                         ui.separator();
 
@@ -521,6 +560,53 @@ impl QPlayerApp {
                     state.command_queue.push(cmd);
                 }
             }
+        }
+
+        // Log window
+        let mut show_log = if let Ok(state) = self.state.lock() {
+            state.show_log_window
+        } else {
+            false
+        };
+        if show_log {
+            egui::Window::new("Log")
+                .collapsible(false)
+                .resizable(true)
+                .default_size([600.0, 400.0])
+                .open(&mut show_log)
+                .show(ctx, |ui| {
+                    crate::log_window::show(ui, &self.state);
+                });
+        }
+        if let Ok(mut state) = self.state.lock() {
+            state.show_log_window = show_log;
+        }
+
+        // About window
+        let mut show_about = if let Ok(state) = self.state.lock() {
+            state.show_about_window
+        } else {
+            false
+        };
+        if show_about {
+            egui::Window::new("About QPlayer")
+                .collapsible(false)
+                .resizable(false)
+                .default_size([320.0, 180.0])
+                .open(&mut show_about)
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.heading("QPlayer");
+                        ui.label("A professional audio/video playback application");
+                        ui.separator();
+                        ui.label("Version: 0.2.0");
+                        ui.hyperlink_to("GitHub", "https://github.com/BlueJayLouche/QPlayer");
+                        ui.label("License: GPL-3.0");
+                    });
+                });
+        }
+        if let Ok(mut state) = self.state.lock() {
+            state.show_about_window = show_about;
         }
 
         // Process any commands queued during the frame
@@ -616,8 +702,26 @@ impl QPlayerApp {
                 }
             });
 
-            ui.menu_button("View", |ui| {
-                ui.label("Zoom / Grid options (TODO)");
+            ui.menu_button("Window", |ui| {
+                let mut show_log = {
+                    let Ok(state) = self.state.lock() else { return; };
+                    state.show_log_window
+                };
+                if ui.checkbox(&mut show_log, "Log").clicked() {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.show_log_window = show_log;
+                    }
+                    ui.close();
+                }
+            });
+
+            ui.menu_button("Help", |ui| {
+                if ui.button("About QPlayer").clicked() {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.show_about_window = true;
+                    }
+                    ui.close();
+                }
             });
         });
     }
@@ -882,6 +986,39 @@ impl QPlayerApp {
                             let cue = state.show_file.cues.remove(from_idx);
                             let insert_idx = if to_idx > from_idx { to_idx } else { to_idx };
                             state.show_file.cues.insert(insert_idx, cue);
+                            state.dirty = true;
+                        }
+                    }
+                }
+                AppCommand::UpdateCueQid { qid, new_qid } => {
+                    if let Ok(mut state) = self.state.lock() {
+                        let idx = state.show_file.cues.iter().position(|c| c.base().qid == qid);
+                        if let Some(i) = idx {
+                            let snapshot = Snapshot::from_state(&state);
+                            state.undo_redo.push(snapshot);
+                            state.show_file.cues[i].base_mut().qid = new_qid;
+                            state.dirty = true;
+                        }
+                    }
+                }
+                AppCommand::UpdateCueName { qid, name } => {
+                    if let Ok(mut state) = self.state.lock() {
+                        let idx = state.show_file.cues.iter().position(|c| c.base().qid == qid);
+                        if let Some(i) = idx {
+                            let snapshot = Snapshot::from_state(&state);
+                            state.undo_redo.push(snapshot);
+                            state.show_file.cues[i].base_mut().name = name;
+                            state.dirty = true;
+                        }
+                    }
+                }
+                AppCommand::UpdateCueTrigger { qid, trigger } => {
+                    if let Ok(mut state) = self.state.lock() {
+                        let idx = state.show_file.cues.iter().position(|c| c.base().qid == qid);
+                        if let Some(i) = idx {
+                            let snapshot = Snapshot::from_state(&state);
+                            state.undo_redo.push(snapshot);
+                            state.show_file.cues[i].base_mut().trigger = trigger;
                             state.dirty = true;
                         }
                     }

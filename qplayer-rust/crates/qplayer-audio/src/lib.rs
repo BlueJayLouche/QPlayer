@@ -3,6 +3,7 @@
 //! Lock-free audio callbacks, sample-accurate fades, EQ, mixing.
 
 pub mod biquad;
+pub mod buffered_source;
 pub mod channel_converter;
 pub mod decoder;
 pub mod engine;
@@ -17,6 +18,7 @@ pub mod resampler;
 pub mod sample_provider;
 
 pub use biquad::Biquad;
+pub use buffered_source::BufferedSource;
 pub use channel_converter::MonoToStereo;
 pub use decoder::FfmpegDecoder;
 pub use engine::{AudioEngine, AudioError};

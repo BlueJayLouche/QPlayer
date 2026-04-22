@@ -6,6 +6,8 @@ pub mod active_cues;
 pub mod app;
 pub mod cue_list;
 pub mod inspector;
+pub mod log_window;
+pub mod logging;
 pub mod transport;
 pub mod waveform;
 

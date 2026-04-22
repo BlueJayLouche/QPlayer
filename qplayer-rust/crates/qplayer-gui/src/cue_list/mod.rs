@@ -96,24 +96,81 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                     }
 
                     // Q# column
-                    let qid_str = qid.to_string();
-                    let response = ui.selectable_label(is_selected, &qid_str);
-                    if response.clicked() {
-                        queue_select(state, qid);
+                    if show_mode == crate::app::ShowMode::Edit {
+                        let mut qid_str = qid.to_string();
+                        let response = ui.add_sized(
+                            [48.0, 18.0],
+                            egui::TextEdit::singleline(&mut qid_str)
+                                .id_salt(egui::Id::new(("qid", qid)))
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        if response.lost_focus() {
+                            if let Ok(new_qid) = qid_str.parse::<rust_decimal::Decimal>() {
+                                if new_qid != qid {
+                                    queue_cmd(state, AppCommand::UpdateCueQid { qid, new_qid });
+                                }
+                            }
+                        }
+                        if response.clicked() {
+                            queue_select(state, qid);
+                        }
+                    } else {
+                        let qid_str = qid.to_string();
+                        let response = ui.selectable_label(is_selected, &qid_str);
+                        if response.clicked() {
+                            queue_select(state, qid);
+                        }
                     }
                     ui.separator();
 
                     // Name column
-                    let response = ui.selectable_label(is_selected, name.as_str());
-                    if response.clicked() {
-                        queue_select(state, qid);
+                    if show_mode == crate::app::ShowMode::Edit {
+                        let mut name_str = name.clone();
+                        let response = ui.add_sized(
+                            [140.0, 18.0],
+                            egui::TextEdit::singleline(&mut name_str)
+                                .id_salt(egui::Id::new(("name", qid)))
+                                .font(egui::TextStyle::Body),
+                        );
+                        if response.changed() && response.lost_focus() {
+                            queue_cmd(state, AppCommand::UpdateCueName { qid, name: name_str });
+                        }
+                        if response.clicked() {
+                            queue_select(state, qid);
+                        }
+                    } else {
+                        let response = ui.selectable_label(is_selected, name.as_str());
+                        if response.clicked() {
+                            queue_select(state, qid);
+                        }
                     }
                     ui.separator();
 
                     // Trigger column
-                    let trigger_label = format!("{:?}", base.trigger);
-                    let trigger_short = &trigger_label[..trigger_label.len().min(3)];
-                    ui.label(RichText::new(trigger_short).monospace().size(10.0));
+                    if show_mode == crate::app::ShowMode::Edit {
+                        let mut trigger = base.trigger;
+                        egui::ComboBox::from_id_salt(egui::Id::new(("trigger", qid)))
+                            .selected_text(format!("{:?}", trigger))
+                            .width(70.0)
+                            .show_ui(ui, |ui| {
+                                for mode in [
+                                    qplayer_core::TriggerMode::Go,
+                                    qplayer_core::TriggerMode::WithLast,
+                                    qplayer_core::TriggerMode::AfterLast,
+                                ] {
+                                    if ui.selectable_label(trigger == mode, format!("{:?}", mode)).clicked() {
+                                        trigger = mode;
+                                    }
+                                }
+                            });
+                        if trigger != base.trigger {
+                            queue_cmd(state, AppCommand::UpdateCueTrigger { qid, trigger });
+                        }
+                    } else {
+                        let trigger_label = format!("{:?}", base.trigger);
+                        let trigger_short = &trigger_label[..trigger_label.len().min(3)];
+                        ui.label(RichText::new(trigger_short).monospace().size(10.0));
+                    }
                     ui.separator();
 
                     // Duration / Progress column
