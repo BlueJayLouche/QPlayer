@@ -100,6 +100,7 @@ fn cue_type_label(cue: &Cue) -> &'static str {
     match cue {
         Cue::Group { .. } => "GRP",
         Cue::Sound { .. } => "SND",
+        Cue::Video { .. } => "VID",
         Cue::Stop { .. } => "STP",
         Cue::Volume { .. } => "VOL",
         Cue::Dummy { .. } => "DUM",

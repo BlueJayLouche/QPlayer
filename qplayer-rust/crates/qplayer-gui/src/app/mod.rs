@@ -228,6 +228,7 @@ impl QPlayerApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qplayer_core::CueBase;
 
     #[test]
     fn test_shared_state_default() {

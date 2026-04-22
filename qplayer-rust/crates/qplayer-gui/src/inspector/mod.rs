@@ -27,6 +27,14 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
             ui.horizontal(|ui| { ui.label("Pan:"); ui.label(format!("{:.0}", pan * 100.0)); });
             ui.horizontal(|ui| { ui.label("Enabled:"); ui.label(if base.enabled { "Yes" } else { "No" }); });
         }
+        qplayer_core::Cue::Video { path, volume, pan, .. } => {
+            ui.label(RichText::new("Video Cue").monospace().size(12.0));
+            ui.horizontal(|ui| { ui.label("Name:"); ui.label(&base.name); });
+            ui.horizontal(|ui| { ui.label("File:"); ui.monospace(path); });
+            ui.horizontal(|ui| { ui.label("Volume:"); ui.label(format!("{:.1} dB", 20.0 * volume.log10())); });
+            ui.horizontal(|ui| { ui.label("Pan:"); ui.label(format!("{:.0}", pan * 100.0)); });
+            ui.horizontal(|ui| { ui.label("Enabled:"); ui.label(if base.enabled { "Yes" } else { "No" }); });
+        }
         qplayer_core::Cue::Group { .. } => {
             ui.label(RichText::new("Group Cue").monospace().size(12.0));
             ui.horizontal(|ui| { ui.label("Name:"); ui.label(&base.name); });

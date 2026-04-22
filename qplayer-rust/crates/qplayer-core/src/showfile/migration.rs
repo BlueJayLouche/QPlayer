@@ -96,6 +96,9 @@ fn upgrade_v6_to_v7(show_file: &mut ShowFile, _raw: &Value) {
             crate::Cue::Volume { volume, .. } => {
                 *volume = linear_to_db(*volume);
             }
+            crate::Cue::Video { volume, .. } => {
+                *volume = linear_to_db(*volume);
+            }
             _ => {}
         }
     }

@@ -136,6 +136,30 @@ pub enum Cue {
         #[serde(default)]
         fade_type: FadeType,
     },
+
+    #[serde(rename = "VideoCue")]
+    Video {
+        #[serde(flatten)]
+        base: CueBase,
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        start_time: Timespan,
+        #[serde(default)]
+        duration: Timespan,
+        #[serde(default)]
+        volume: f32,
+        #[serde(default)]
+        pan: f32,
+        #[serde(default)]
+        fade_in: f32,
+        #[serde(default)]
+        fade_out: f32,
+        #[serde(default)]
+        fade_type: FadeType,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        eq: Option<crate::EQSettings>,
+    },
 }
 
 // Convenience type aliases for pattern matching ergonomics.
@@ -145,6 +169,7 @@ pub type SoundCue = Cue;
 pub type TimeCodeCue = Cue;
 pub type StopCue = Cue;
 pub type VolumeCue = Cue;
+pub type VideoCue = Cue;
 
 impl Cue {
     /// Access the shared base fields of any cue variant.
@@ -156,6 +181,7 @@ impl Cue {
             Cue::TimeCode { base, .. } => base,
             Cue::Stop { base, .. } => base,
             Cue::Volume { base, .. } => base,
+            Cue::Video { base, .. } => base,
         }
     }
 
@@ -168,6 +194,7 @@ impl Cue {
             Cue::TimeCode { base, .. } => base,
             Cue::Stop { base, .. } => base,
             Cue::Volume { base, .. } => base,
+            Cue::Video { base, .. } => base,
         }
     }
 
@@ -320,5 +347,31 @@ mod tests {
             }
             other => panic!("expected SoundCue, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_video_cue_serde() {
+        let cue = Cue::Video {
+            base: CueBase {
+                qid: Decimal::from(3),
+                name: "Intro Video".into(),
+                ..Default::default()
+            },
+            path: "video/intro.mp4".into(),
+            start_time: Timespan::ZERO,
+            duration: Timespan::from_secs_f64(60.0),
+            volume: -6.0,
+            pan: 0.0,
+            fade_in: 1.0,
+            fade_out: 1.0,
+            fade_type: FadeType::SCurve,
+            eq: None,
+        };
+        let json = serde_json::to_string(&cue).unwrap();
+        let de: Cue = serde_json::from_str(&json).unwrap();
+        assert_eq!(cue, de);
+        // Verify the tag
+        let val = serde_json::to_value(&cue).unwrap();
+        assert_eq!(val["$type"], "VideoCue");
     }
 }
