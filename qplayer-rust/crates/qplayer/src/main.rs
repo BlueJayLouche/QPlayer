@@ -312,7 +312,21 @@ impl App {
         });
     }
 
-    /// Create (or recreate) the fullscreen video output window.
+    /// Toggle fullscreen on the video window and update cursor visibility.
+    fn toggle_video_fullscreen(&self) {
+        if let Some(window) = self.video_window.as_ref() {
+            let currently_fullscreen = window.fullscreen().is_some();
+            if currently_fullscreen {
+                window.set_fullscreen(None);
+                window.set_cursor_visible(true);
+            } else {
+                window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                window.set_cursor_visible(false);
+            }
+        }
+    }
+
+    /// Create (or recreate) the video output window (starts windowed).
     fn create_video_window(&mut self, event_loop: &ActiveEventLoop) {
         if self.video_window.is_some() {
             return;
@@ -322,7 +336,6 @@ impl App {
                 .create_window(
                     winit::window::WindowAttributes::default()
                         .with_title("QPlayer Video Output")
-                        .with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
                         .with_visible(true),
                 )
                 .expect("create video window"),
@@ -968,14 +981,7 @@ impl App {
                     }
                 }
                 AppCommand::ToggleVideoFullscreen => {
-                    if let Some(window) = self.video_window.as_ref() {
-                        let currently_fullscreen = window.fullscreen().is_some();
-                        if currently_fullscreen {
-                            window.set_fullscreen(None);
-                        } else {
-                            window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
-                        }
-                    }
+                    self.toggle_video_fullscreen();
                 }
                 AppCommand::SaveProject | AppCommand::SaveProjectAs { .. } => {
                     if let Some(pm) = self.plugin_manager.as_mut() {
@@ -1499,29 +1505,16 @@ impl ApplicationHandler<AppEvent> for App {
                         if is_esc {
                             if let Some(window) = self.video_window.as_ref() {
                                 window.set_fullscreen(None);
+                                window.set_cursor_visible(true);
                             }
                         }
                         // F11 toggles fullscreen
                         else if is_f11 {
-                            if let Some(window) = self.video_window.as_ref() {
-                                let currently_fullscreen = window.fullscreen().is_some();
-                                if currently_fullscreen {
-                                    window.set_fullscreen(None);
-                                } else {
-                                    window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
-                                }
-                            }
+                            self.toggle_video_fullscreen();
                         }
                         // Ctrl+F or Cmd+F toggles fullscreen
                         else if is_f && has_ctrl {
-                            if let Some(window) = self.video_window.as_ref() {
-                                let currently_fullscreen = window.fullscreen().is_some();
-                                if currently_fullscreen {
-                                    window.set_fullscreen(None);
-                                } else {
-                                    window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
-                                }
-                            }
+                            self.toggle_video_fullscreen();
                         }
                     }
                 }
