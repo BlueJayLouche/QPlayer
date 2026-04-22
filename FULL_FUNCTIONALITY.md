@@ -2,7 +2,7 @@
 
 This document tracks the remaining work to reach feature parity with the C# QPlayer application. The architectural phases (core, audio, video, protocols, plugins) are complete. This roadmap focuses on **GUI interactivity, cue manipulation, and production usability**.
 
-> Last updated: 2026-04-22 (Bug fixes: exit lockup, Go button, DND reordering; Features: context menus, AfterLast, device hot-swap, .qpek caching, full settings window)
+> Last updated: 2026-04-22 (P1 progress: Delay/Wait, Playback progress, More cue list columns; Bug fixes: exit lockup, Go button, DND reordering)
 > Status: Foundation complete → GUI interactivity in progress
 
 ---
@@ -29,7 +29,7 @@ This document tracks the remaining work to reach feature parity with the C# QPla
 | A.5 | **Move cue up/down** | `Ctrl+↑/↓`, drag-and-drop | ✅ `Ctrl+↑/↓` swaps cue position; context menu items too | — |
 | A.6 | **QID auto-assignment** | `ChooseQID()` with decimal subdivision (1 → 1.1 → 1.01) | ✅ `ShowFile::choose_qid()` with 6-level decimal subdivision fallback to max+1 | — |
 | A.7 | **Colour picker** | Full picker in inspector | ✅ `ui.color_edit_button_srgba` wired to `SerializedColour` in inspector | — |
-| A.8 | **Cue list columns** | Q#, Playback, Name, Enabled, Trigger, Wait, Duration, Loop | ⚠️ Only Q#, Name, Type, Colour swatch | Missing: Playback progress bar, Enabled checkbox, Trigger, Wait, Duration, Loop columns |
+| A.8 | **Cue list columns** | Q#, Playback, Name, Enabled, Trigger, Wait, Duration, Loop | ✅ Trigger, Duration, Loop Mode added; mini progress bar for active cues | Missing: Enabled checkbox, Wait column |
 | A.9 | **Inline editing in cue list** | `HiddenTextbox` / `HiddenComboBox` for direct row edit | ❌ Not implemented | C# allows editing QID, Name, Trigger, etc. directly in the list row |
 | A.10 | **Parent / Group hierarchy** | `parent` field on `CueBase` for nested grouping | ✅ Data model has `parent: Option<Decimal>` | Not wired in UI (no visual tree/group expansion) |
 
@@ -50,9 +50,9 @@ User can create, edit, delete, duplicate, and reorder cues entirely through the 
 | B.6 | **Stop cue behavior** | Find target by QID, apply fade-out | ✅ Finds target in `active_cues`, thread-based fade-out over `fade_out_time`, then deactivates | — |
 | B.7 | **Volume cue behavior** | Find target sound cue, apply volume fade | ✅ Finds target in `active_cues`, thread-based volume fade over `fade_time` to target dB | — |
 | B.8 | **Active cues panel** | Left panel showing running cues with live status | ✅ Left `SidePanel` with QID, name, pause indicator, and tiny volume meter | Minor: no per-cue progress bar, no individual stop/go/pause buttons |
-| B.9 | **Delay / Wait** | Per-cue `Delay` (`TimeSpan`) deferred start | ❌ Not implemented | Data model has `delay` field but runtime ignores it |
+| B.9 | **Delay / Wait** | Per-cue `Delay` (`TimeSpan`) deferred start | ✅ Delay editor in inspector (0-60s drag); `DelayedCue` queue checked each frame | `qplayer/src/main.rs`, `qplayer-gui/src/inspector/mod.rs` |
 | B.10 | **Looping** | `LoopMode`: OneShot, Looped, LoopedInfinite, HoldLast | ❌ Not implemented | Data model has `loop_mode`/`loop_count` but runtime ignores it |
-| B.11 | **Playback progress** | Per-cue progress bar + time display in list | ❌ Not implemented | C# shows progress bar and elapsed time in each cue row |
+| B.11 | **Playback progress** | Per-cue progress bar + time display in list | ✅ `MixerInput::position()/length()` synced to GUI; progress bars in active cues panel and cue list | `qplayer/src/main.rs`, `qplayer-gui/src/cue_list/mod.rs`, `qplayer-gui/src/active_cues/mod.rs` |
 
 ### Exit Criterion
 Pressing Go, Stop, Pause behaves identically to C# for SoundCue, VideoCue, StopCue, and VolumeCue.
