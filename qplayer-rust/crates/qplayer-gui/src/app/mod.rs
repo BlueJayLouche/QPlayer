@@ -13,6 +13,8 @@ pub struct Snapshot {
     pub selected_cue_id: Option<Decimal>,
     pub show_mode: ShowMode,
     pub dirty: bool,
+    /// If set, consecutive snapshots with the same key are merged into one.
+    pub merge_key: Option<String>,
 }
 
 impl Snapshot {
@@ -23,7 +25,13 @@ impl Snapshot {
             selected_cue_id: state.selected_cue_id,
             show_mode: state.show_mode,
             dirty: state.dirty,
+            merge_key: None,
         }
+    }
+
+    pub fn with_merge_key(mut self, key: impl Into<String>) -> Self {
+        self.merge_key = Some(key.into());
+        self
     }
 
     pub fn apply(self, state: &mut SharedState) {
@@ -56,9 +64,21 @@ impl UndoRedo {
     }
 
     /// Push a snapshot onto the undo stack, clearing the redo stack.
+    /// If the new snapshot has the same merge_key as the top of the stack,
+    /// the top snapshot is replaced instead of pushing a new one.
     pub fn push(&mut self, snapshot: Snapshot) {
         if self.suppress {
             return;
+        }
+        if let Some(ref key) = snapshot.merge_key {
+            if let Some(top) = self.undo_stack.last() {
+                if top.merge_key.as_ref() == Some(key) {
+                    // Replace top snapshot with new one (merge consecutive edits)
+                    *self.undo_stack.last_mut().unwrap() = snapshot;
+                    self.redo_stack.clear();
+                    return;
+                }
+            }
         }
         self.undo_stack.push(snapshot);
         if self.undo_stack.len() > self.max_depth {
@@ -159,12 +179,29 @@ pub struct SharedState {
     pub waveform_cache: std::collections::HashMap<String, Vec<(f32, f32)>>,
     /// Paths currently being processed for waveform generation.
     pub pending_waveforms: std::collections::HashSet<String>,
+    /// Waveform zoom level (1.0 = fit to width, >1.0 = zoomed in).
+    pub waveform_zoom: f32,
+    /// Waveform scroll offset in bars.
+    pub waveform_scroll: f32,
     /// Available audio output device names (populated at startup).
     pub audio_devices: Vec<String>,
     /// Whether the log window is open.
     pub show_log_window: bool,
     /// Whether the About window is open.
     pub show_about_window: bool,
+    /// Whether the Plugin Manager window is open.
+    pub show_plugin_manager: bool,
+    /// List of loaded plugins (name, path) for the plugin manager window.
+    pub plugin_list: Vec<(String, String)>,
+    /// Progress overlay: if Some, shows a blocking modal with message + progress.
+    pub progress_overlay: Option<ProgressOverlay>,
+}
+
+/// State for the progress overlay modal.
+#[derive(Debug, Clone)]
+pub struct ProgressOverlay {
+    pub message: String,
+    pub progress: f32, // 0.0 to 1.0
 }
 
 impl Default for SharedState {
@@ -184,9 +221,14 @@ impl Default for SharedState {
             audio_device_name: String::new(),
             waveform_cache: std::collections::HashMap::new(),
             pending_waveforms: std::collections::HashSet::new(),
+            waveform_zoom: 1.0,
+            waveform_scroll: 0.0,
             audio_devices: Vec::new(),
             show_log_window: false,
             show_about_window: false,
+            show_plugin_manager: false,
+            plugin_list: Vec::new(),
+            progress_overlay: None,
         }
     }
 }
@@ -231,6 +273,7 @@ pub enum AppCommand {
     OpenProject { path: PathBuf },
     SaveProject,
     SaveProjectAs { path: PathBuf },
+    PackProject { path: PathBuf },
     Go,
     Stop,
     Pause,
@@ -416,6 +459,41 @@ impl QPlayerApp {
             crate::cue_list::show(ui, &self.state);
         });
 
+        // Status bar
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            self.status_bar(ui);
+        });
+
+        // Progress overlay
+        let overlay = {
+            let Ok(state) = self.state.lock() else { return; };
+            state.progress_overlay.clone()
+        };
+        if let Some(overlay) = overlay {
+            egui::Area::new(egui::Id::new("progress_overlay"))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    let screen_rect = ctx.screen_rect();
+                    ui.painter().rect_filled(screen_rect, 0.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, 180));
+
+                    let modal_size = egui::vec2(320.0, 120.0);
+                    let modal_rect = egui::Rect::from_center_size(screen_rect.center(), modal_size);
+                    ui.painter().rect_filled(modal_rect, 8.0, ui.visuals().panel_fill);
+                    ui.painter().rect_stroke(modal_rect, 8.0, egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color), egui::StrokeKind::Inside);
+
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(modal_rect.shrink(16.0)), |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading("Please Wait");
+                            ui.add_space(8.0);
+                            ui.label(&overlay.message);
+                            ui.add_space(8.0);
+                            let progress = overlay.progress.clamp(0.0, 1.0);
+                            ui.add(egui::ProgressBar::new(progress).show_percentage());
+                        });
+                    });
+                });
+        }
+
         // Project settings window
         let mut show_settings = if let Ok(state) = self.state.lock() {
             state.show_settings_window
@@ -582,6 +660,47 @@ impl QPlayerApp {
             state.show_log_window = show_log;
         }
 
+        // Plugin Manager window
+        let mut show_plugins = if let Ok(state) = self.state.lock() {
+            state.show_plugin_manager
+        } else {
+            false
+        };
+        if show_plugins {
+            egui::Window::new("Plugin Manager")
+                .collapsible(false)
+                .resizable(true)
+                .default_size([400.0, 250.0])
+                .open(&mut show_plugins)
+                .show(ctx, |ui| {
+                    let plugins = {
+                        let Ok(state) = self.state.lock() else { return; };
+                        state.plugin_list.clone()
+                    };
+                    if plugins.is_empty() {
+                        ui.label("No plugins loaded.");
+                    } else {
+                        egui::Grid::new("plugin_grid")
+                            .num_columns(2)
+                            .spacing([40.0, 4.0])
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new("Name").strong());
+                                ui.label(egui::RichText::new("Path").strong());
+                                ui.end_row();
+                                for (name, path) in &plugins {
+                                    ui.label(name);
+                                    ui.label(egui::RichText::new(path).monospace().size(10.0));
+                                    ui.end_row();
+                                }
+                            });
+                    }
+                });
+        }
+        if let Ok(mut state) = self.state.lock() {
+            state.show_plugin_manager = show_plugins;
+        }
+
         // About window
         let mut show_about = if let Ok(state) = self.state.lock() {
             state.show_about_window
@@ -654,6 +773,34 @@ impl QPlayerApp {
                 }
 
                 ui.separator();
+                let mut autosave = {
+                    let Ok(state) = self.state.lock() else { return; };
+                    state.show_file.show_settings.autosave_enabled
+                };
+                if ui.checkbox(&mut autosave, "Autosave").clicked() {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.show_file.show_settings.autosave_enabled = autosave;
+                        state.dirty = true;
+                    }
+                    ui.close();
+                }
+
+                ui.separator();
+                if ui.button("Pack…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("QPlayer project", &["qproj"])
+                        .save_file()
+                    {
+                        // Strip extension to get target folder (matches C# behavior)
+                        let folder = path.with_extension("");
+                        if let Ok(mut state) = self.state.lock() {
+                            state.command_queue.push(AppCommand::PackProject { path: folder });
+                        }
+                    }
+                    ui.close();
+                }
+
+                ui.separator();
                 if ui.button("Project Settings…").clicked() {
                     if let Ok(mut state) = self.state.lock() {
                         state.show_settings_window = true;
@@ -713,6 +860,16 @@ impl QPlayerApp {
                     }
                     ui.close();
                 }
+                let mut show_plugins = {
+                    let Ok(state) = self.state.lock() else { return; };
+                    state.show_plugin_manager
+                };
+                if ui.checkbox(&mut show_plugins, "Plugin Manager").clicked() {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.show_plugin_manager = show_plugins;
+                    }
+                    ui.close();
+                }
             });
 
             ui.menu_button("Help", |ui| {
@@ -722,6 +879,64 @@ impl QPlayerApp {
                     }
                     ui.close();
                 }
+            });
+        });
+    }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let (active_count, cue_count, show_mode, dirty) = {
+            let Ok(state) = self.state.lock() else { return; };
+            (
+                state.active_cues.len(),
+                state.show_file.cues.len(),
+                state.show_mode,
+                state.dirty,
+            )
+        };
+
+        ui.horizontal(|ui| {
+            // Status text
+            let status = if active_count > 0 {
+                format!("▶ Playing {} cue{}", active_count, if active_count == 1 { "" } else { "s" })
+            } else {
+                "Ready".to_string()
+            };
+            ui.label(egui::RichText::new(status).small());
+
+            ui.separator();
+
+            // Show mode indicator
+            let mode_text = match show_mode {
+                ShowMode::Edit => "🖊 Edit",
+                ShowMode::Show => "▶ Show",
+            };
+            let mode_color = match show_mode {
+                ShowMode::Edit => egui::Color32::from_rgb(120, 180, 255),
+                ShowMode::Show => egui::Color32::from_rgb(100, 220, 100),
+            };
+            ui.label(egui::RichText::new(mode_text).small().color(mode_color));
+
+            ui.separator();
+
+            // Cue count
+            ui.label(egui::RichText::new(format!("{} cues", cue_count)).small());
+
+            ui.separator();
+
+            // Dirty indicator
+            if dirty {
+                ui.label(egui::RichText::new("● Unsaved changes").small().color(egui::Color32::YELLOW));
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Audio active indicator
+                let audio_color = if active_count > 0 {
+                    egui::Color32::from_rgb(100, 220, 100)
+                } else {
+                    egui::Color32::from_rgb(120, 120, 120)
+                };
+                let audio_text = if active_count > 0 { "Audio: On" } else { "Audio: Off" };
+                ui.label(egui::RichText::new(audio_text).small().color(audio_color));
             });
         });
     }
@@ -823,6 +1038,11 @@ impl QPlayerApp {
                 AppCommand::SaveProjectAs { path } => {
                     if let Err(e) = self.save_to_path(&path) {
                         log::error!("Failed to save project: {}", e);
+                    }
+                }
+                AppCommand::PackProject { path } => {
+                    if let Err(e) = self.pack_project(&path) {
+                        log::error!("Failed to pack project: {}", e);
                     }
                 }
                 AppCommand::SelectCue(id) => {
@@ -952,7 +1172,8 @@ impl QPlayerApp {
                             let idx = state.show_file.cues.iter().position(|c| c.base().qid == id);
                             if let Some(i) = idx {
                                 if i > 0 {
-                                    let snapshot = Snapshot::from_state(&state);
+                                    let snapshot = Snapshot::from_state(&state)
+                                        .with_merge_key("move_cue");
                                     state.undo_redo.push(snapshot);
                                     state.show_file.cues.swap(i, i - 1);
                                     state.dirty = true;
@@ -968,7 +1189,8 @@ impl QPlayerApp {
                             let idx = state.show_file.cues.iter().position(|c| c.base().qid == id);
                             if let Some(i) = idx {
                                 if i + 1 < len {
-                                    let snapshot = Snapshot::from_state(&state);
+                                    let snapshot = Snapshot::from_state(&state)
+                                        .with_merge_key("move_cue");
                                     state.undo_redo.push(snapshot);
                                     state.show_file.cues.swap(i, i + 1);
                                     state.dirty = true;
@@ -981,7 +1203,8 @@ impl QPlayerApp {
                     if let Ok(mut state) = self.state.lock() {
                         let len = state.show_file.cues.len();
                         if from_idx < len && to_idx < len && from_idx != to_idx {
-                            let snapshot = Snapshot::from_state(&state);
+                            let snapshot = Snapshot::from_state(&state)
+                                .with_merge_key("move_cue");
                             state.undo_redo.push(snapshot);
                             let cue = state.show_file.cues.remove(from_idx);
                             let insert_idx = if to_idx > from_idx { to_idx } else { to_idx };
@@ -994,7 +1217,8 @@ impl QPlayerApp {
                     if let Ok(mut state) = self.state.lock() {
                         let idx = state.show_file.cues.iter().position(|c| c.base().qid == qid);
                         if let Some(i) = idx {
-                            let snapshot = Snapshot::from_state(&state);
+                            let snapshot = Snapshot::from_state(&state)
+                                .with_merge_key(format!("cue:{}:qid", qid));
                             state.undo_redo.push(snapshot);
                             state.show_file.cues[i].base_mut().qid = new_qid;
                             state.dirty = true;
@@ -1005,7 +1229,8 @@ impl QPlayerApp {
                     if let Ok(mut state) = self.state.lock() {
                         let idx = state.show_file.cues.iter().position(|c| c.base().qid == qid);
                         if let Some(i) = idx {
-                            let snapshot = Snapshot::from_state(&state);
+                            let snapshot = Snapshot::from_state(&state)
+                                .with_merge_key(format!("cue:{}:name", qid));
                             state.undo_redo.push(snapshot);
                             state.show_file.cues[i].base_mut().name = name;
                             state.dirty = true;
@@ -1016,7 +1241,8 @@ impl QPlayerApp {
                     if let Ok(mut state) = self.state.lock() {
                         let idx = state.show_file.cues.iter().position(|c| c.base().qid == qid);
                         if let Some(i) = idx {
-                            let snapshot = Snapshot::from_state(&state);
+                            let snapshot = Snapshot::from_state(&state)
+                                .with_merge_key(format!("cue:{}:trigger", qid));
                             state.undo_redo.push(snapshot);
                             state.show_file.cues[i].base_mut().trigger = trigger;
                             state.dirty = true;
@@ -1054,6 +1280,137 @@ impl QPlayerApp {
         log::info!("Project saved to {:?}", path);
         Ok(())
     }
+
+    /// Pack project: copy all media into `Media/` folder, rewrite paths, save.
+    fn pack_project(&self, folder: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+        std::fs::create_dir_all(folder)?;
+
+        let media_dir = folder.join("Media");
+        std::fs::create_dir_all(&media_dir)?;
+
+        let folder_name = folder.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Packed");
+        let proj_path = folder.join(format!("{}.qproj", folder_name));
+
+        // Collect file paths and build path mapping
+        let mut path_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+        {
+            let Ok(state) = self.state.lock() else {
+                return Err("failed to lock state".into());
+            };
+
+            // Gather all referenced file paths from cues
+            let mut file_paths: Vec<String> = Vec::new();
+            for cue in &state.show_file.cues {
+                match cue {
+                    qplayer_core::Cue::Sound { path, .. } | qplayer_core::Cue::Video { path, .. } => {
+                        if !path.is_empty() && !file_paths.contains(path) {
+                            file_paths.push(path.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Build collision map: filename -> list of (original_path, absolute_path)
+            let mut by_filename: std::collections::HashMap<String, Vec<(String, std::path::PathBuf)>> =
+                std::collections::HashMap::new();
+
+            for original in &file_paths {
+                let abs = if std::path::Path::new(original).is_absolute() {
+                    std::path::PathBuf::from(original)
+                } else if let Some(proj) = state.project_path.as_ref() {
+                    proj.parent().unwrap_or(folder).join(original)
+                } else {
+                    folder.join(original)
+                };
+                let fname = std::path::Path::new(original)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                by_filename.entry(fname).or_default().push((original.clone(), abs));
+            }
+
+            // Copy files and build path mapping
+            for (_fname, entries) in &by_filename {
+                if entries.len() > 1 {
+                    // Name collision: preserve subdir structure by finding common prefix
+                    let abs_paths: Vec<_> = entries.iter().map(|(_, abs)| abs.clone()).collect();
+                    let common = common_path_prefix(&abs_paths);
+                    for (original, abs) in entries {
+                        let rel = abs.strip_prefix(&common).unwrap_or(std::path::Path::new(abs.file_name().unwrap_or_default()));
+                        let dst = media_dir.join(rel);
+                        if let Some(parent) = dst.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if abs.exists() {
+                            std::fs::copy(abs, &dst)?;
+                        }
+                        let new_rel = pathdiff::diff_paths(&dst, folder)
+                            .unwrap_or_else(|| dst.clone());
+                        path_map.insert(original.clone(), new_rel.to_string_lossy().to_string());
+                    }
+                } else {
+                    // Unique name: copy directly to Media/
+                    let (original, abs) = &entries[0];
+                    let dst = media_dir.join(abs.file_name().unwrap_or_default());
+                    if abs.exists() {
+                        std::fs::copy(abs, &dst)?;
+                    }
+                    let new_rel = pathdiff::diff_paths(&dst, folder)
+                        .unwrap_or_else(|| dst.clone());
+                    path_map.insert(original.clone(), new_rel.to_string_lossy().to_string());
+                }
+            }
+        }
+
+        // Rewrite paths in cues and save
+        {
+            let Ok(mut state) = self.state.lock() else {
+                return Err("failed to lock state".into());
+            };
+
+            for cue in &mut state.show_file.cues {
+                match cue {
+                    qplayer_core::Cue::Sound { path, .. } | qplayer_core::Cue::Video { path, .. } => {
+                        if let Some(new_path) = path_map.get(path) {
+                            *path = new_path.clone();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let json = serde_json::to_string_pretty(&state.show_file)?;
+            std::fs::write(&proj_path, json)?;
+            state.project_path = Some(proj_path.clone());
+            state.dirty = false;
+            state.push_recent_file(&proj_path);
+        }
+
+        log::info!("Project packed to {:?}", proj_path);
+        Ok(())
+    }
+}
+
+/// Find the longest common directory prefix among a set of paths.
+fn common_path_prefix(paths: &[std::path::PathBuf]) -> std::path::PathBuf {
+    if paths.is_empty() {
+        return std::path::PathBuf::new();
+    }
+    let mut prefix = paths[0].parent().unwrap_or(&paths[0]).to_path_buf();
+    for path in &paths[1..] {
+        let parent = path.parent().unwrap_or(path);
+        while !parent.starts_with(&prefix) {
+            if !prefix.pop() {
+                break;
+            }
+        }
+    }
+    prefix
 }
 
 #[cfg(test)]

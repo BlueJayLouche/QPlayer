@@ -86,6 +86,8 @@ struct App {
     active_cues: Vec<ActiveCue>,
     delayed_cues: Vec<DelayedCue>,
     paused: bool,
+    show_start_time: Option<Instant>,
+    triggered_timecodes: Vec<rust_decimal::Decimal>,
 
     // ── video playback ──
     event_loop_proxy: winit::event_loop::EventLoopProxy<AppEvent>,
@@ -249,6 +251,8 @@ impl App {
             active_cues: Vec::new(),
             delayed_cues: Vec::new(),
             paused: false,
+            show_start_time: None,
+            triggered_timecodes: Vec::new(),
         }
     }
 
@@ -348,6 +352,12 @@ impl App {
     /// Handle a `Go` command: start audio (and video if cue is VideoCue).
     /// Also handles `WithLast` trigger mode for subsequent cues.
     fn handle_go(&mut self, event_loop: &ActiveEventLoop) {
+        // Start the show clock on first Go
+        if self.show_start_time.is_none() {
+            self.show_start_time = Some(Instant::now());
+            self.triggered_timecodes.clear();
+        }
+
         let (start_qid, start_idx) = {
             let state = self.qplayer.state().lock().unwrap();
             let qid = state.selected_cue_id;
@@ -484,6 +494,52 @@ impl App {
         }
     }
 
+    /// Resolve a file path: try absolute, then relative to project, then search project tree.
+    fn resolve_path(&self, path: &str) -> Option<String> {
+        let p = std::path::Path::new(path);
+        if p.is_absolute() && p.exists() {
+            return Some(path.to_string());
+        }
+        // Try relative to project directory
+        let project_dir = self.qplayer.state().lock().ok()?.project_path
+            .as_ref()?
+            .parent()
+            .map(|p| p.to_path_buf())?;
+        let relative = project_dir.join(p);
+        if relative.exists() {
+            return Some(relative.to_string_lossy().to_string());
+        }
+        // Search project tree for matching filename
+        let file_name = p.file_name()?;
+        let found = std::fs::read_dir(&project_dir).ok()?.find_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_file() && path.file_name()? == file_name {
+                Some(path)
+            } else if path.is_dir() {
+                Self::find_in_dir(&path, file_name)
+            } else {
+                None
+            }
+        });
+        found.map(|p| p.to_string_lossy().to_string())
+    }
+
+    fn find_in_dir(dir: &std::path::Path, target: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
+        for entry in std::fs::read_dir(dir).ok()? {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_file() && path.file_name()? == target {
+                return Some(path);
+            } else if path.is_dir() {
+                if let Some(found) = Self::find_in_dir(&path, target) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
     fn play_audio(
         &mut self,
         path: &str,
@@ -499,7 +555,11 @@ impl App {
         fade_type: qplayer_core::FadeType,
         preload_only: bool,
     ) {
-        match FfmpegDecoder::open(path) {
+        let resolved = self.resolve_path(path).unwrap_or_else(|| path.to_string());
+        if resolved != path {
+            log::info!("Resolved path '{}' -> '{}'", path, resolved);
+        }
+        match FfmpegDecoder::open(&resolved) {
             Ok(decoder) => {
                 let sample_rate = decoder.sample_rate();
                 let loop_proc = qplayer_audio::LoopProcessor::new(Box::new(decoder));
@@ -1115,6 +1175,35 @@ impl App {
             }
         }
 
+        // Check for TimeCode cues whose start time has been reached
+        if let Some(start) = self.show_start_time {
+            let elapsed = start.elapsed().as_secs_f64();
+            let timecode_cues = {
+                let Ok(state) = self.qplayer.state().lock() else { return; };
+                state.show_file.cues.iter()
+                    .filter_map(|cue| match cue {
+                        qplayer_core::Cue::TimeCode { base, start_time, .. } => {
+                            if start_time.as_secs_f64() > 0.0
+                                && elapsed >= start_time.as_secs_f64()
+                                && !self.triggered_timecodes.contains(&base.qid)
+                            {
+                                Some(cue.clone())
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for cue in timecode_cues {
+                let qid = cue.base().qid;
+                log::info!("TimeCode cue Q{} triggered at {:.2}s", qid, elapsed);
+                self.triggered_timecodes.push(qid);
+                self.play_cue(&cue, event_loop);
+            }
+        }
+
         self.update_window_title();
         let Some(surface) = self.control_surface.as_ref() else { return };
         let Some(config) = self.control_config.as_ref() else { return };
@@ -1385,6 +1474,16 @@ impl ApplicationHandler<AppEvent> for App {
             if let Some(pm) = self.plugin_manager.as_mut() {
                 pm.on_slow_update();
             }
+            // Sync plugin list to GUI state
+            if let Some(pm) = self.plugin_manager.as_ref() {
+                let plugins: Vec<(String, String)> = pm.list_plugins()
+                    .iter()
+                    .map(|p| (p.name.clone(), p.path.clone()))
+                    .collect();
+                if let Ok(mut state) = self.qplayer.state().lock() {
+                    state.plugin_list = plugins;
+                }
+            }
         }
 
         // Continuously redraw both windows when active.
@@ -1456,11 +1555,11 @@ fn spawn_autosave_thread(state: SharedStateHandle, running: Arc<AtomicBool>) {
                 continue;
             }
             elapsed = 0;
-            let (should_save, path) = {
+            let (should_save, path, autosave_enabled) = {
                 let Ok(state) = state.lock() else { continue };
-                (state.dirty, state.project_path.clone())
+                (state.dirty, state.project_path.clone(), state.show_file.show_settings.autosave_enabled)
             };
-            if !should_save {
+            if !autosave_enabled || !should_save {
                 continue;
             }
             let Some(_project_path) = path else { continue };

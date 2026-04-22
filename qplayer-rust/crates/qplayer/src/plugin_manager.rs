@@ -3,9 +3,15 @@
 use qplayer_plugin_api::{PluginHost, PluginInstance};
 use std::path::Path;
 
+pub struct PluginInfo {
+    pub name: String,
+    pub path: String,
+}
+
 pub struct PluginManager {
     _host: PluginHost,
     plugins: Vec<PluginInstance>,
+    plugin_info: Vec<PluginInfo>,
 }
 
 impl PluginManager {
@@ -14,6 +20,7 @@ impl PluginManager {
         Ok(Self {
             _host: host,
             plugins: Vec::new(),
+            plugin_info: Vec::new(),
         })
     }
 
@@ -53,6 +60,10 @@ impl PluginManager {
                     } else {
                         log::info!("Loaded plugin: {}", name);
                         self.plugins.push(plugin);
+                        self.plugin_info.push(PluginInfo {
+                            name: name.to_string(),
+                            path: path.to_string_lossy().to_string(),
+                        });
                     }
                 }
                 Err(e) => {
@@ -99,5 +110,9 @@ impl PluginManager {
                 log::warn!("Plugin on_slow_update failed: {}", e);
             }
         }
+    }
+
+    pub fn list_plugins(&self) -> &[PluginInfo] {
+        &self.plugin_info
     }
 }

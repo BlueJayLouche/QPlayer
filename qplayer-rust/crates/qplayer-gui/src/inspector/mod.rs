@@ -40,7 +40,7 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
 
     let Ok(mut state) = state.lock() else { return };
 
-    // Pre-fetch waveform data before taking mutable cue reference
+    // Pre-fetch waveform data and zoom/scroll before taking mutable cue reference
     let waveform_data = if let Some(cue) = state.selected_cue() {
         let path = match cue {
             qplayer_core::Cue::Sound { path, .. } | qplayer_core::Cue::Video { path, .. } => path.clone(),
@@ -52,6 +52,7 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
     } else {
         None
     };
+    let (mut waveform_zoom, mut waveform_scroll) = (state.waveform_zoom, state.waveform_scroll);
 
     let Some(cue) = state.selected_cue_mut() else {
         ui.label("Select a cue to edit its properties.");
@@ -175,7 +176,9 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                 }
             });
             if let Some((Some(ref peaks), _)) = waveform_data {
-                crate::waveform::draw(ui, peaks);
+                let (new_zoom, new_scroll) = crate::waveform::draw(ui, peaks, waveform_zoom, waveform_scroll);
+                waveform_zoom = new_zoom;
+                waveform_scroll = new_scroll;
             } else if let Some((None, true)) = waveform_data {
                 ui.label(egui::RichText::new("Generating waveform…").italics().color(egui::Color32::GRAY));
             }
@@ -234,7 +237,9 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                 }
             });
             if let Some((Some(ref peaks), _)) = waveform_data {
-                crate::waveform::draw(ui, peaks);
+                let (new_zoom, new_scroll) = crate::waveform::draw(ui, peaks, waveform_zoom, waveform_scroll);
+                waveform_zoom = new_zoom;
+                waveform_scroll = new_scroll;
             } else if let Some((None, true)) = waveform_data {
                 ui.label(egui::RichText::new("Generating waveform…").italics().color(egui::Color32::GRAY));
             }
@@ -349,6 +354,10 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
     if changed {
         state.dirty = true;
     }
+
+    // Write back waveform zoom/scroll (separate borrow to avoid conflict with cue editing)
+    state.waveform_zoom = waveform_zoom;
+    state.waveform_scroll = waveform_scroll;
 }
 
 fn eq_editor(ui: &mut egui::Ui, eq: &mut Option<qplayer_core::EQSettings>, changed: &mut bool) {

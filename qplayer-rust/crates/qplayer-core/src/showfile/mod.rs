@@ -116,6 +116,8 @@ pub struct ShowSettings {
     pub is_remote_host: bool,
     #[serde(default = "default_true")]
     pub sync_show_file_on_save: bool,
+    #[serde(default = "default_true")]
+    pub autosave_enabled: bool,
     #[serde(default = "default_node_name")]
     pub node_name: String,
     #[serde(default)]
@@ -157,6 +159,7 @@ impl Default for ShowSettings {
             enable_remote_control: false,
             is_remote_host: true,
             sync_show_file_on_save: true,
+            autosave_enabled: true,
             node_name: default_node_name(),
             remote_nodes: Vec::new(),
             enable_msc: false,
