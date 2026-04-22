@@ -2,7 +2,7 @@
 
 This document tracks the remaining work to reach feature parity with the C# QPlayer application. The architectural phases (core, audio, video, protocols, plugins) are complete. This roadmap focuses on **GUI interactivity, cue manipulation, and production usability**.
 
-> Last updated: 2026-04-22 (Context menus on whole row, AfterLast auto-trigger, audio device hot-swap, .qpek peak file caching, full project settings window with Audio/OSC/MSC sections)
+> Last updated: 2026-04-22 (Bug fixes: exit lockup, Go button, DND reordering; Features: context menus, AfterLast, device hot-swap, .qpek caching, full settings window)
 > Status: Foundation complete → GUI interactivity in progress
 
 ---
