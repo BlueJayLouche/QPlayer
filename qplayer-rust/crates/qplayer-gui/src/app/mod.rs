@@ -635,11 +635,11 @@ impl QPlayerApp {
     fn process_commands(&mut self, _ctx: &egui::Context) {
         let commands = {
             let Ok(mut state) = self.state.lock() else { return };
-            let cmds = state.command_queue.clone();
-            state.command_queue.clear();
+            let cmds: Vec<_> = state.command_queue.drain(..).collect();
             cmds
         };
 
+        let mut unhandled = Vec::new();
         for cmd in commands {
             match cmd {
                 AppCommand::NewProject => {
@@ -868,8 +868,17 @@ impl QPlayerApp {
                         }
                     }
                 }
-                // Go, Stop, Pause are handled by the main application (qplayer/src/main.rs)
-                _ => {}
+                // Go, Stop, Pause, SetLimiterThreshold, SetAudioDevice are handled by main.rs
+                other => {
+                    unhandled.push(other);
+                }
+            }
+        }
+
+        // Put back commands that main.rs should handle
+        if !unhandled.is_empty() {
+            if let Ok(mut state) = self.state.lock() {
+                state.command_queue.extend(unhandled);
             }
         }
     }

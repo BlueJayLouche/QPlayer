@@ -1163,11 +1163,17 @@ fn video_decode_thread(
 fn spawn_autosave_thread(state: SharedStateHandle, running: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         let mut slot = 0usize;
+        let mut elapsed = 0u64;
         while running.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_secs(60));
+            std::thread::sleep(Duration::from_secs(1));
             if !running.load(Ordering::Relaxed) {
                 break;
             }
+            elapsed += 1;
+            if elapsed < 60 {
+                continue;
+            }
+            elapsed = 0;
             let (should_save, path) = {
                 let Ok(state) = state.lock() else { continue };
                 (state.dirty, state.project_path.clone())

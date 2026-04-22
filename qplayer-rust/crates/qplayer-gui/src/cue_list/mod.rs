@@ -70,49 +70,53 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                 ui.visuals().panel_fill
             };
 
-            let frame_response = egui::Frame::new()
+            let frame = egui::Frame::new()
                 .fill(bg)
-                .inner_margin(egui::Margin::same(4))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.set_min_height(20.0);
+                .inner_margin(egui::Margin::same(4));
 
-                        // Drag handle (only in edit mode)
-                        if show_mode == crate::app::ShowMode::Edit {
+            let (drop_response, dropped_payload) = ui.dnd_drop_zone::<usize, ()>(frame, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_min_height(20.0);
+
+                    // Drag handle (only in edit mode)
+                    if show_mode == crate::app::ShowMode::Edit {
+                        let drag_id = ui.auto_id_with(("drag", idx));
+                        ui.dnd_drag_source(drag_id, idx, |ui| {
                             ui.label(egui::RichText::new("≡").monospace().size(14.0));
-                        }
+                        });
+                    }
 
-                        // Q# column
-                        let qid_str = qid.to_string();
-                        let response = ui.selectable_label(is_selected, &qid_str);
-                        if response.clicked() {
-                            queue_select(state, qid);
-                        }
-                        ui.separator();
+                    // Q# column
+                    let qid_str = qid.to_string();
+                    let response = ui.selectable_label(is_selected, &qid_str);
+                    if response.clicked() {
+                        queue_select(state, qid);
+                    }
+                    ui.separator();
 
-                        // Name column
-                        let response = ui.selectable_label(is_selected, name.as_str());
-                        if response.clicked() {
-                            queue_select(state, qid);
-                        }
-                        ui.separator();
+                    // Name column
+                    let response = ui.selectable_label(is_selected, name.as_str());
+                    if response.clicked() {
+                        queue_select(state, qid);
+                    }
+                    ui.separator();
 
-                        // Type column
-                        ui.label(RichText::new(cue_type).monospace().size(10.0));
-                        ui.separator();
+                    // Type column
+                    ui.label(RichText::new(cue_type).monospace().size(10.0));
+                    ui.separator();
 
-                        // Colour swatch
-                        let (rect, _response) = ui.allocate_exact_size(
-                            egui::vec2(16.0, 16.0),
-                            egui::Sense::hover(),
-                        );
-                        ui.painter().rect_filled(rect, 4.0, colour);
-                    });
+                    // Colour swatch
+                    let (rect, _response) = ui.allocate_exact_size(
+                        egui::vec2(16.0, 16.0),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(rect, 4.0, colour);
                 });
+            });
 
             // Context menu on the entire row (right-click anywhere in the frame)
             if show_mode == crate::app::ShowMode::Edit {
-                frame_response.response.context_menu(|ui| {
+                drop_response.response.context_menu(|ui| {
                     if ui.button("Move Up").clicked() {
                         queue_cmd(state, AppCommand::MoveSelectedCueUp);
                         ui.close();
@@ -150,10 +154,9 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                 });
             }
 
-            // Drag-and-drop reordering (edit mode only)
+            // Handle dropped payload for reordering
             if show_mode == crate::app::ShowMode::Edit {
-                frame_response.response.dnd_set_drag_payload(idx);
-                if let Some(source_idx) = frame_response.response.dnd_release_payload::<usize>() {
+                if let Some(source_idx) = dropped_payload {
                     let source = *source_idx;
                     if source != idx {
                         queue_cmd(state, AppCommand::MoveCue { from_idx: source, to_idx: idx });
