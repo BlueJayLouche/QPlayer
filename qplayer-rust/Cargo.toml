@@ -55,6 +55,7 @@ brotli = "7.0"
 qplayer-core = { path = "crates/qplayer-core" }
 qplayer-audio = { path = "crates/qplayer-audio" }
 qplayer-gui = { path = "crates/qplayer-gui" }
+qplayer-video = { path = "crates/qplayer-video" }
 qplayer-protocols = { path = "crates/qplayer-protocols" }
 qplayer-plugin-api = { path = "crates/qplayer-plugin-api" }
 

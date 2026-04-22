@@ -12,8 +12,9 @@
 //!   a pre-cached snapshot updated only when the vec changes).
 
 use crate::SampleProvider;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Mixer target format: 48 kHz stereo float.
 pub const MIXER_SAMPLE_RATE: u32 = 48_000;
@@ -107,6 +108,8 @@ pub struct Mixer {
     snapshot: Mutex<Vec<Arc<MixerInput>>>,
     /// Set to true when the snapshot needs refreshing.
     dirty: AtomicBool,
+    /// Total frames rendered since creation. Used as the audio master clock.
+    frame_counter: AtomicU64,
 }
 
 impl Mixer {
@@ -117,6 +120,7 @@ impl Mixer {
             inputs: Mutex::new(Vec::new()),
             snapshot: Mutex::new(Vec::new()),
             dirty: AtomicBool::new(false),
+            frame_counter: AtomicU64::new(0),
         }
     }
 
@@ -158,6 +162,10 @@ impl Mixer {
         // Clear output
         buffer.fill(0.0);
 
+        // Advance the master audio clock.
+        let frames = buffer.len() / self.channels.max(1) as usize;
+        self.frame_counter.fetch_add(frames as u64, Ordering::Relaxed);
+
         // Read snapshot without locking (main thread guarantees atomic update)
         let snapshot = self.snapshot.lock().unwrap();
 
@@ -193,6 +201,15 @@ impl Mixer {
                 apply_volume_pan_mix_mono(&temp[..read], buffer, volume);
             }
         }
+    }
+
+    /// Current playback time according to the audio master clock.
+    ///
+    /// This counts continuously from engine creation. To get cue-relative time,
+    /// subtract the clock value captured when the cue was started.
+    pub fn playback_time(&self) -> Duration {
+        let frames = self.frame_counter.load(Ordering::Relaxed);
+        Duration::from_secs_f64(frames as f64 / self.sample_rate as f64)
     }
 }
 

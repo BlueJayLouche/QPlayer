@@ -1,19 +1,589 @@
-//! QPlayer binary — main entry point.
+//! QPlayer binary — custom winit event loop with dual windows.
+//!
+//! - Control window: egui UI (replaces eframe)
+//! - Video output window: wgpu fullscreen blit (lazy-created on first video)
+//! - Audio engine: cpal output with master clock for A/V sync
+//! - Video decode: background thread that sleeps until frame PTS, then sends
+//!   frame to main thread via winit user event.
 
-use qplayer_gui::QPlayerApp;
+use qplayer_audio::{AudioEngine, FfmpegDecoder};
+use qplayer_gui::{AppCommand, QPlayerApp};
+use qplayer_video::{Renderer, Texture, VideoFrame, VideoSource};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use winit::application::ApplicationHandler;
+use winit::event::WindowEvent;
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::window::{Window, WindowId};
 
-fn main() {
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
-            .with_min_inner_size([800.0, 600.0]),
-        ..Default::default()
+/// User events sent to the main event loop from background threads.
+#[derive(Debug)]
+enum AppEvent {
+    /// A decoded video frame ready for display.
+    VideoFrame(VideoFrame),
+    /// Video stream reached EOF.
+    VideoEof,
+}
+
+/// Per-window identifiers so we can route events.
+struct WindowIds {
+    control: WindowId,
+    video: Option<WindowId>,
+}
+
+struct App {
+    // ── wgpu core ──
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+
+    // ── control window (egui) ──
+    control_window: Option<Arc<Window>>,
+    control_surface: Option<wgpu::Surface<'static>>,
+    control_config: Option<wgpu::SurfaceConfiguration>,
+
+    // ── video window (wgpu blit) ──
+    video_window: Option<Arc<Window>>,
+    video_surface: Option<wgpu::Surface<'static>>,
+    video_config: Option<wgpu::SurfaceConfiguration>,
+
+    // ── egui ──
+    egui_ctx: egui::Context,
+    egui_state: Option<egui_winit::State>,
+    egui_renderer: Option<egui_wgpu::Renderer>,
+
+    // ── app state ──
+    qplayer: QPlayerApp,
+    window_ids: Option<WindowIds>,
+
+
+    // ── audio ──
+    audio_engine: AudioEngine,
+
+    // ── video playback ──
+    event_loop_proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+    video_texture: Option<Texture>,
+    video_renderer: Option<Renderer>,
+    latest_video_frame: Option<VideoFrame>,
+    video_frame_dirty: bool,
+    video_start_clock: Option<Duration>,
+    video_stop_flag: Arc<AtomicBool>,
+}
+
+impl App {
+    fn new(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+    ) -> Self {
+        let audio_engine = AudioEngine::new_default().expect("audio engine init failed");
+        let qplayer = QPlayerApp::new();
+
+        Self {
+            instance,
+            adapter,
+            device,
+            queue,
+            control_window: None,
+            control_surface: None,
+            control_config: None,
+            video_window: None,
+            video_surface: None,
+            video_config: None,
+            egui_ctx: egui::Context::default(),
+            egui_state: None,
+            egui_renderer: None,
+            qplayer,
+            window_ids: None,
+            audio_engine,
+            event_loop_proxy: proxy,
+            video_texture: None,
+            video_renderer: None,
+            latest_video_frame: None,
+            video_frame_dirty: false,
+            video_start_clock: None,
+            video_stop_flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Create the control window + surface + egui state.
+    fn create_control_window(&mut self, event_loop: &ActiveEventLoop) {
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    winit::window::WindowAttributes::default()
+                        .with_title("QPlayer")
+                        .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0)),
+                )
+                .expect("create control window"),
+        );
+
+        let surface = self
+            .instance
+            .create_surface(Arc::clone(&window))
+            .expect("create control surface");
+
+        let size = window.inner_size();
+        let config = surface
+            .get_default_config(&self.adapter, size.width, size.height)
+            .expect("control surface config");
+        surface.configure(&self.device, &config);
+
+        let egui_state = egui_winit::State::new(
+            self.egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &window,
+            None,
+            None,
+            None,
+        );
+
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &self.device,
+            config.format,
+            None,
+            1,
+            false,
+        );
+
+        let control_id = window.id();
+        self.control_window = Some(window);
+        self.control_surface = Some(surface);
+        self.control_config = Some(config);
+        self.egui_state = Some(egui_state);
+        self.egui_renderer = Some(egui_renderer);
+
+        let video_id = self.video_window.as_ref().map(|w| w.id());
+        self.window_ids = Some(WindowIds {
+            control: control_id,
+            video: video_id,
+        });
+    }
+
+    /// Create (or recreate) the fullscreen video output window.
+    fn create_video_window(&mut self, event_loop: &ActiveEventLoop) {
+        if self.video_window.is_some() {
+            return;
+        }
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    winit::window::WindowAttributes::default()
+                        .with_title("QPlayer Video Output")
+                        .with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
+                        .with_visible(true),
+                )
+                .expect("create video window"),
+        );
+
+        let surface = self
+            .instance
+            .create_surface(Arc::clone(&window))
+            .expect("create video surface");
+
+        let size = window.inner_size();
+        let config = surface
+            .get_default_config(&self.adapter, size.width, size.height)
+            .expect("video surface config");
+        surface.configure(&self.device, &config);
+
+        let video_id = window.id();
+        self.video_window = Some(window);
+        self.video_surface = Some(surface);
+        self.video_config = Some(config);
+
+        if let Some(ids) = self.window_ids.as_mut() {
+            ids.video = Some(video_id);
+        }
+    }
+
+
+
+    /// Handle a `Go` command: start audio (and video if cue is VideoCue).
+    fn handle_go(&mut self, event_loop: &ActiveEventLoop) {
+        let cue = {
+            let state = self.qplayer.state().lock().unwrap();
+            state.selected_cue().cloned()
+        };
+
+        let Some(cue) = cue else {
+            log::info!("Go pressed but no cue selected");
+            return;
+        };
+
+        match cue {
+            qplayer_core::Cue::Sound { path, .. } => {
+                log::info!("Go SoundCue: {}", path);
+                self.play_audio(&path);
+            }
+            qplayer_core::Cue::Video { path, .. } => {
+                log::info!("Go VideoCue: {}", path);
+                self.play_audio(&path);
+                self.play_video(&path, event_loop);
+            }
+            other => {
+                log::info!("Go on unsupported cue type: {:?}", std::mem::discriminant(&other));
+            }
+        }
+    }
+
+    fn play_audio(&self, path: &str) {
+        match FfmpegDecoder::open(path) {
+            Ok(decoder) => {
+                self.audio_engine.play(Box::new(decoder));
+            }
+            Err(e) => {
+                log::error!("Failed to open audio for {}: {}", path, e);
+            }
+        }
+    }
+
+    fn play_video(&mut self, path: &str, event_loop: &ActiveEventLoop) {
+        self.create_video_window(event_loop);
+        self.video_stop_flag.store(false, Ordering::Relaxed);
+        self.video_start_clock = Some(self.audio_engine.playback_time());
+        self.latest_video_frame = None;
+        self.video_frame_dirty = false;
+
+        // Create video texture/renderer if not yet created
+        if self.video_texture.is_none() {
+            let texture = Texture::new(&self.device, 1920, 1080);
+            let renderer = Renderer::new(&self.device, texture.bind_group_layout());
+            self.video_texture = Some(texture);
+            self.video_renderer = Some(renderer);
+        }
+
+        // Spawn decode thread
+        let path = path.to_string();
+        let clock = {
+            let mixer = Arc::clone(self.audio_engine.mixer());
+            Arc::new(move || mixer.playback_time()) as Arc<dyn Fn() -> Duration + Send + Sync>
+        };
+        let start = self.video_start_clock.unwrap();
+        let stop_flag = Arc::clone(&self.video_stop_flag);
+        let proxy = self.event_loop_proxy.clone();
+
+        std::thread::Builder::new()
+            .name("video-decode".into())
+            .spawn(move || {
+                video_decode_thread(&path, clock, start, stop_flag, proxy);
+            })
+            .expect("spawn video decode thread");
+    }
+
+    fn stop_all(&mut self) {
+        self.video_stop_flag.store(true, Ordering::Relaxed);
+        self.latest_video_frame = None;
+        self.video_frame_dirty = false;
+        self.video_start_clock = None;
+        // TODO: stop audio playback
+    }
+
+    /// Drain any AppCommands queued by the UI and execute them.
+    fn process_commands(&mut self, event_loop: &ActiveEventLoop) {
+        let commands = {
+            let Ok(mut state) = self.qplayer.state().lock() else { return };
+            let cmds = state.command_queue.clone();
+            state.command_queue.clear();
+            cmds
+        };
+
+        for cmd in commands {
+            match cmd {
+                AppCommand::Go => self.handle_go(event_loop),
+                AppCommand::Stop => self.stop_all(),
+                _ => {}
+            }
+        }
+    }
+
+    /// Render the control window (egui).
+    fn render_control(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(surface) = self.control_surface.as_ref() else { return };
+        let Some(config) = self.control_config.as_ref() else { return };
+        let Some(window) = self.control_window.as_ref() else { return };
+        let Some(egui_state) = self.egui_state.as_mut() else { return };
+        let Some(egui_renderer) = self.egui_renderer.as_mut() else { return };
+
+        let output = match surface.get_current_texture() {
+            Ok(o) => o,
+            Err(e) => {
+                log::warn!("Control surface acquire failed: {e}");
+                return;
+            }
+        };
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let raw_input = egui_state.take_egui_input(window);
+        let full_output = self.egui_ctx.run(raw_input, |ctx| {
+            self.qplayer.update(ctx);
+        });
+        egui_state.handle_platform_output(window, full_output.platform_output);
+
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [config.width, config.height],
+            pixels_per_point: window.scale_factor() as f32 * self.egui_ctx.zoom_factor(),
+        };
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("control-encoder"),
+        });
+
+        let paint_jobs = self.egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        for (id, image_delta) in &full_output.textures_delta.set {
+            egui_renderer.update_texture(&self.device, &self.queue, *id, image_delta);
+        }
+        egui_renderer.update_buffers(&self.device, &self.queue, &mut encoder, &paint_jobs, &screen_descriptor);
+
+        {
+            let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("control-render-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+            egui_renderer.render(&mut render_pass.forget_lifetime(), &paint_jobs, &screen_descriptor);
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+
+        // Process commands that were queued during the UI frame
+        self.process_commands(event_loop);
+    }
+
+    /// Render the video output window.
+    fn render_video(&mut self) {
+        let Some(surface) = self.video_surface.as_ref() else { return };
+        let Some(texture) = self.video_texture.as_mut() else { return };
+        let Some(renderer) = self.video_renderer.as_ref() else { return };
+
+        if self.video_frame_dirty {
+            if let Some(frame) = self.latest_video_frame.as_ref() {
+                texture.upload(&self.queue, frame);
+            }
+            self.video_frame_dirty = false;
+        }
+
+        let output = match surface.get_current_texture() {
+            Ok(o) => o,
+            Err(e) => {
+                log::warn!("Video surface acquire failed: {e}");
+                return;
+            }
+        };
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("video-encoder"),
+        });
+
+        renderer.render(&mut encoder, &view, texture.current_bind_group());
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+    }
+}
+
+impl ApplicationHandler<AppEvent> for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.control_window.is_none() {
+            self.create_control_window(event_loop);
+        }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
+        match event {
+            AppEvent::VideoFrame(frame) => {
+                self.latest_video_frame = Some(frame);
+                self.video_frame_dirty = true;
+                if let Some(window) = self.video_window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            AppEvent::VideoEof => {
+                log::info!("Video EOF");
+            }
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        let is_control = self
+            .window_ids
+            .as_ref()
+            .map(|ids| ids.control == window_id)
+            .unwrap_or(false);
+        let is_video = self
+            .window_ids
+            .as_ref()
+            .map(|ids| ids.video == Some(window_id))
+            .unwrap_or(false);
+
+        if is_control {
+            if let (Some(egui_state), Some(window)) = (self.egui_state.as_mut(), self.control_window.as_ref()) {
+                let _response = egui_state.on_window_event(window, &event);
+            }
+
+            match event {
+                WindowEvent::CloseRequested => {
+                    event_loop.exit();
+                }
+                WindowEvent::Resized(size) => {
+                    if size.width > 0 && size.height > 0 {
+                        if let Some(config) = self.control_config.as_mut() {
+                            config.width = size.width;
+                            config.height = size.height;
+                        }
+                        if let Some(surface) = self.control_surface.as_ref() {
+                            if let Some(config) = self.control_config.as_ref() {
+                                surface.configure(&self.device, config);
+                            }
+                        }
+                    }
+                }
+                WindowEvent::RedrawRequested => {
+                    self.render_control(event_loop);
+                    if let Some(window) = self.control_window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
+                _ => {}
+            }
+        } else if is_video {
+            match event {
+                WindowEvent::CloseRequested => {
+                    self.video_window = None;
+                    self.video_surface = None;
+                    self.video_config = None;
+                    if let Some(ids) = self.window_ids.as_mut() {
+                        ids.video = None;
+                    }
+                }
+                WindowEvent::Resized(size) => {
+                    if size.width > 0 && size.height > 0 {
+                        if let Some(config) = self.video_config.as_mut() {
+                            config.width = size.width;
+                            config.height = size.height;
+                        }
+                        if let Some(surface) = self.video_surface.as_ref() {
+                            if let Some(config) = self.video_config.as_ref() {
+                                surface.configure(&self.device, config);
+                            }
+                        }
+                    }
+                }
+                WindowEvent::RedrawRequested => {
+                    self.render_video();
+                    if let Some(window) = self.video_window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Continuously redraw both windows when active.
+        if let Some(window) = self.control_window.as_ref() {
+            window.request_redraw();
+        }
+        if let Some(window) = self.video_window.as_ref() {
+            window.request_redraw();
+        }
+    }
+}
+
+/// Video decode thread: sleeps until each frame's PTS, then sends it to the main loop.
+fn video_decode_thread(
+    path: &str,
+    clock: Arc<dyn Fn() -> Duration + Send + Sync>,
+    start_clock: Duration,
+    stop_flag: Arc<AtomicBool>,
+    proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+) {
+    let mut source = match VideoSource::open(path, 1920, 1080) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to open video source {}: {e}", path);
+            return;
+        }
     };
 
-    eframe::run_native(
-        "QPlayer",
-        options,
-        Box::new(|_cc| Ok(Box::new(QPlayerApp::new()))),
-    )
-    .unwrap();
+    while !stop_flag.load(Ordering::Relaxed) {
+        match source.read_frame() {
+            Some(frame) => {
+                let elapsed = clock().saturating_sub(start_clock);
+                let frame_due = Duration::from_secs_f64(frame.pts.max(0.0));
+
+                if frame_due > elapsed {
+                    let sleep_for = frame_due - elapsed;
+                    // Cap sleep to avoid missing stop signals for too long
+                    std::thread::sleep(sleep_for.min(Duration::from_millis(50)));
+                }
+
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                if proxy.send_event(AppEvent::VideoFrame(frame)).is_err() {
+                    break;
+                }
+            }
+            None => {
+                let _ = proxy.send_event(AppEvent::VideoEof);
+                break;
+            }
+        }
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
+    let event_loop = EventLoop::with_user_event().build()?;
+    event_loop.set_control_flow(ControlFlow::Poll);
+    let proxy = event_loop.create_proxy();
+
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+
+    // Create a headless adapter first (we'll create surfaces after windows exist)
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .map_err(|e| anyhow::anyhow!("no wgpu adapter: {e}"))?;
+
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("qplayer-device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            ..Default::default()
+        },
+    ))?;
+
+    let mut app = App::new(instance, adapter, device, queue, proxy);
+    event_loop.run_app(&mut app)?;
+    Ok(())
 }

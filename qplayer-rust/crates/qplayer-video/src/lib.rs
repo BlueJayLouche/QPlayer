@@ -1,13 +1,13 @@
-//! Video output crate — fullscreen GPU window for video playback.
+//! Video output crate — wgpu helpers for video playback.
 //!
-//! Architecture:
-//! - `OutputWindow`: owns a winit window + wgpu surface (borderless fullscreen).
-//! - `Renderer`: simple textured quad blit pipeline.
-//! - `Texture`: double-buffered RGBA texture upload from CPU-decoded frames.
-//! - `VideoSource`: wraps FFmpeg video decoder + `sws_scale` converter.
+//! This crate provides:
+//! - `Renderer`: simple textured quad blit pipeline
+//! - `Texture`: double-buffered RGBA texture upload
+//! - `VideoSource`: FFmpeg video decoder + `sws_scale` converter
+//! - `OutputWindow`: winit window + wgpu surface helper
 //!
-//! A/V sync: the audio clock (from `qplayer-audio`) is the master. Video frames
-//! are presented only when their PTS <= audio clock + vsync offset.
+//! The main application (in `qplayer`) wires these together inside its own
+//! winit event loop, syncing video presentation to the audio master clock.
 
 mod renderer;
 mod texture;

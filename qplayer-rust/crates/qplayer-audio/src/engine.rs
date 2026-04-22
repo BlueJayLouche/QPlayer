@@ -10,6 +10,7 @@ use crate::resampler::ResamplerProcessor;
 use crate::SampleProvider;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Central audio engine.
 pub struct AudioEngine {
@@ -176,6 +177,11 @@ impl AudioEngine {
     /// Refresh the mixer snapshot. Call from the main thread each frame.
     pub fn refresh(&self) {
         self.mixer.refresh_snapshot();
+    }
+
+    /// Current playback time of the audio master clock.
+    pub fn playback_time(&self) -> Duration {
+        self.mixer.playback_time()
     }
 
     /// Build a full per-cue processor chain from a decoder.

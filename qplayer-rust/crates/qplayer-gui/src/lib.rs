@@ -8,4 +8,4 @@ pub mod inspector;
 pub mod transport;
 pub mod waveform;
 
-pub use app::QPlayerApp;
+pub use app::{AppCommand, QPlayerApp, SharedState, SharedStateHandle, ShowMode};

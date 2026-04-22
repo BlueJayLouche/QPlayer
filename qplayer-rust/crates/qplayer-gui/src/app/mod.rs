@@ -105,8 +105,8 @@ impl QPlayerApp {
     }
 }
 
-impl eframe::App for QPlayerApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl QPlayerApp {
+    pub fn update(&mut self, ctx: &egui::Context) {
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             self.menu_bar(ui);
