@@ -702,10 +702,24 @@ Estimates assume one full-time developer with Rust experience. Each phase has an
 | Integration (`qplayer` binary) | ✅ | OSC + MSC managers wired into `AppCommand` queue; dual-window binary compiles |
 | **Phase 5 Status** | **✅ COMPLETE** | **6 protocol tests passing; workspace clean build** |
 
+### Phase 7 Progress (Partial — Polish items ahead of Phase 6)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Save / Save As | ✅ | `serde_json::to_string_pretty` to `.qproj`; Save As via `rfd` dialog |
+| Dirty tracking | ✅ | `dirty: bool` on `SharedState`; set on edits, cleared on New/Open/Save |
+| Window title dirty indicator | ✅ | "QPlayer — show.qproj *" updates per frame |
+| Autosave | ✅ | 60 s interval, 5 rotating backups in `dirs::data_dir()/QPlayer/autoback_{n}.qproj` |
+| Crash recovery (`human-panic`) | ✅ | Friendly panic messages with crash-report file |
+| SIGINT / SIGTERM handler (`ctrlc`) | ✅ | Emergency autosave to `crash_recovery.qproj` before exit |
+| Drag & Drop (external files) | ✅ | Audio/video file drops onto control window create new cues |
+| Single instance | ✅ | `single-instance` crate prevents multiple app launches |
+| **Phase 7 Status** | **🟡 PARTIAL** | **Core polish complete; Undo/Redo + Installers deferred** |
+
 | 4: Integration + Video | 3 weeks | Wire audio + GUI + video + file I/O | Can load a show, press Go, hear audio + see video, save changes | Medium | ✅ **Complete** |
 | 5: Protocols | 1 week | OSC, MSC, remote control | Existing iPad remote control client connects and triggers cues | Low | ✅ **Complete** |
 | 6: Plugins | 1–2 weeks | Plugin ABI + port OSC/MagicQ plugins | Both ported plugins load and function; plugin crash does not crash host | **High** | ⏳ **Pending** |
-| 7: Polish | 2 weeks | Undo, drag-drop, packaging, docs | Installers built on all 3 OSes; NFR regression suite green | Low | ⏳ **Pending** |
+| 7: Polish | 2 weeks | Undo, drag-drop, packaging, docs | Core polish done; Undo/Redo + installers remain | Low | 🟡 **In Progress** |
 | **Total** | **15–18 weeks** | **Feature-complete Rust QPlayer** | NFRs met; C# feature parity checklist 100% | | |
 
 **Rollback:** if a phase misses its exit criterion by > 20%, halt and re-evaluate scope before advancing. The phased crate split means earlier phases remain shippable as libraries even if later phases slip.
@@ -1168,7 +1182,7 @@ strategy:
 
 ---
 
-*Document version: 1.3*
+*Document version: 1.4*
 *Created: 2026-04-22*
-*Last revised: 2026-04-22 (Phase 5 complete — OSC driver/router/manager, MA-MSC driver/manager, remote block-transfer, all wired into main binary)*
+*Last revised: 2026-04-22 (Phase 7 partial — Save/autosave/crash recovery/drag-drop/single instance complete; Undo/Redo + installers deferred)*
 *Next review: After Phase 6 (Plugin Architecture) completion*

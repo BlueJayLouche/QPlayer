@@ -60,6 +60,7 @@ pub enum AppCommand {
     NewProject,
     OpenProject { path: PathBuf },
     SaveProject,
+    SaveProjectAs { path: PathBuf },
     Go,
     Stop,
     Pause,
@@ -161,6 +162,17 @@ impl QPlayerApp {
                     }
                     ui.close();
                 }
+                if ui.button("Save As…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("QPlayer project", &["qproj"])
+                        .save_file()
+                    {
+                        if let Ok(mut state) = self.state.lock() {
+                            state.command_queue.push(AppCommand::SaveProjectAs { path });
+                        }
+                    }
+                    ui.close();
+                }
             });
 
             ui.menu_button("View", |ui| {
@@ -203,8 +215,30 @@ impl QPlayerApp {
                     }
                 }
                 AppCommand::SaveProject => {
-                    log::info!("Save project");
-                    // TODO: actual file I/O from main thread
+                    let path = {
+                        let Ok(state) = self.state.lock() else { continue };
+                        state.project_path.clone()
+                    };
+                    if let Some(path) = path {
+                        if let Err(e) = self.save_to_path(&path) {
+                            log::error!("Failed to save project: {}", e);
+                        }
+                    } else {
+                        // No path yet — prompt Save As
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("QPlayer project", &["qproj"])
+                            .save_file()
+                        {
+                            if let Err(e) = self.save_to_path(&path) {
+                                log::error!("Failed to save project: {}", e);
+                            }
+                        }
+                    }
+                }
+                AppCommand::SaveProjectAs { path } => {
+                    if let Err(e) = self.save_to_path(&path) {
+                        log::error!("Failed to save project: {}", e);
+                    }
                 }
                 AppCommand::Go => {
                     log::info!("Go!");
@@ -222,6 +256,22 @@ impl QPlayerApp {
                 }
             }
         }
+    }
+
+    fn save_to_path(&self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+        let json = {
+            let Ok(state) = self.state.lock() else {
+                return Err("failed to lock state".into());
+            };
+            serde_json::to_string_pretty(&state.show_file)?
+        };
+        std::fs::write(path, json)?;
+        if let Ok(mut state) = self.state.lock() {
+            state.project_path = Some(path.to_path_buf());
+            state.dirty = false;
+        }
+        log::info!("Project saved to {:?}", path);
+        Ok(())
     }
 }
 

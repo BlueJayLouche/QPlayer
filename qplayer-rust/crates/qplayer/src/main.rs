@@ -7,11 +7,12 @@
 //!   frame to main thread via winit user event.
 
 use qplayer_audio::{AudioEngine, FfmpegDecoder};
-use qplayer_gui::{AppCommand, QPlayerApp};
+use qplayer_gui::{AppCommand, QPlayerApp, SharedStateHandle};
 use qplayer_protocols::msc::{MscCommandFlags, MscEvent, MscManager};
 use qplayer_protocols::osc::{OscEvent, OscManager};
 use qplayer_video::{Renderer, Texture, VideoFrame, VideoSource};
 use std::net::Ipv4Addr;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,6 +20,8 @@ use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
+
+use human_panic::Metadata;
 
 /// User events sent to the main event loop from background threads.
 #[derive(Debug)]
@@ -80,6 +83,10 @@ struct App {
     msc_manager: Option<MscManager>,
     msc_rx: Option<std::sync::mpsc::Receiver<MscEvent>>,
     last_discovery: Instant,
+
+    // ── polish ──
+    last_window_title: String,
+    autosave_running: Arc<AtomicBool>,
 }
 
 impl App {
@@ -140,6 +147,9 @@ impl App {
             }
         };
 
+        let autosave_running = Arc::new(AtomicBool::new(true));
+        spawn_autosave_thread(Arc::clone(&qplayer.state()), Arc::clone(&autosave_running));
+
         Self {
             instance,
             adapter,
@@ -169,6 +179,8 @@ impl App {
             msc_manager,
             msc_rx,
             last_discovery: Instant::now(),
+            last_window_title: String::new(),
+            autosave_running,
         }
     }
 
@@ -345,6 +357,78 @@ impl App {
         // TODO: stop audio playback
     }
 
+    fn handle_dropped_file(&mut self, path: &Path) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase());
+        let is_video = matches!(ext.as_deref(), Some("mp4") | Some("mov") | Some("mkv") | Some("avi"));
+        let is_audio = matches!(
+            ext.as_deref(),
+            Some("wav") | Some("mp3") | Some("flac") | Some("ogg") | Some("aiff") | Some("wma")
+        );
+        if !is_video && !is_audio {
+            log::warn!("Dropped file has unsupported extension: {:?}", path);
+            return;
+        }
+
+        let path_str = path.to_string_lossy().to_string();
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Dropped")
+            .to_string();
+
+        if let Ok(mut state) = self.qplayer.state().lock() {
+            let next_qid = state
+                .show_file
+                .cues
+                .iter()
+                .map(|c| c.base().qid)
+                .max()
+                .unwrap_or(rust_decimal::Decimal::ZERO)
+                + rust_decimal::Decimal::ONE;
+
+            let base = qplayer_core::CueBase {
+                qid: next_qid,
+                name,
+                ..Default::default()
+            };
+
+            let cue = if is_video {
+                qplayer_core::Cue::Video {
+                    base,
+                    path: path_str,
+                    start_time: qplayer_core::Timespan::ZERO,
+                    duration: qplayer_core::Timespan::ZERO,
+                    volume: 0.0,
+                    pan: 0.0,
+                    fade_in: 0.0,
+                    fade_out: 0.0,
+                    fade_type: qplayer_core::FadeType::Linear,
+                    eq: None,
+                }
+            } else {
+                qplayer_core::Cue::Sound {
+                    base,
+                    path: path_str,
+                    start_time: qplayer_core::Timespan::ZERO,
+                    duration: qplayer_core::Timespan::ZERO,
+                    volume: 0.0,
+                    pan: 0.0,
+                    fade_in: 0.0,
+                    fade_out: 0.0,
+                    fade_type: qplayer_core::FadeType::Linear,
+                    eq: None,
+                }
+            };
+
+            state.show_file.cues.push(cue);
+            state.dirty = true;
+            log::info!("Added dropped file as cue {}: {:?}", next_qid, path);
+        }
+    }
+
     /// Drain any AppCommands queued by the UI and execute them.
     fn process_commands(&mut self, event_loop: &ActiveEventLoop) {
         let commands = {
@@ -447,7 +531,31 @@ impl App {
     }
 
     /// Render the control window (egui).
+    fn update_window_title(&mut self) {
+        let (path, dirty) = {
+            let Ok(state) = self.qplayer.state().lock() else { return };
+            (state.project_path.clone(), state.dirty)
+        };
+        let name = path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled");
+        let title = if dirty {
+            format!("QPlayer — {} *", name)
+        } else {
+            format!("QPlayer — {}", name)
+        };
+        if self.last_window_title != title {
+            self.last_window_title = title.clone();
+            if let Some(window) = self.control_window.as_ref() {
+                window.set_title(&title);
+            }
+        }
+    }
+
     fn render_control(&mut self, event_loop: &ActiveEventLoop) {
+        self.update_window_title();
         let Some(surface) = self.control_surface.as_ref() else { return };
         let Some(config) = self.control_config.as_ref() else { return };
         let Some(window) = self.control_window.as_ref() else { return };
@@ -602,6 +710,9 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                 }
+                WindowEvent::DroppedFile(path) => {
+                    self.handle_dropped_file(&path);
+                }
                 WindowEvent::RedrawRequested => {
                     self.render_control(event_loop);
                     if let Some(window) = self.control_window.as_ref() {
@@ -701,7 +812,103 @@ fn video_decode_thread(
     }
 }
 
+/// Autosave background thread: writes dirty show file to rotating backups every 60 s.
+fn spawn_autosave_thread(state: SharedStateHandle, running: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        let mut slot = 0usize;
+        while running.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_secs(60));
+            if !running.load(Ordering::Relaxed) {
+                break;
+            }
+            let (should_save, path) = {
+                let Ok(state) = state.lock() else { continue };
+                (state.dirty, state.project_path.clone())
+            };
+            if !should_save {
+                continue;
+            }
+            let Some(_project_path) = path else { continue };
+
+            let dir = dirs::data_dir()
+                .unwrap_or_else(|| std::env::temp_dir())
+                .join("QPlayer");
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                log::warn!("Autosave: failed to create dir {:?}: {}", dir, e);
+                continue;
+            }
+
+            slot = (slot % 5) + 1;
+            let backup_path = dir.join(format!("autoback_{}.qproj", slot));
+            let json = {
+                let Ok(state) = state.lock() else { continue };
+                match serde_json::to_string_pretty(&state.show_file) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        log::warn!("Autosave: serialization failed: {}", e);
+                        continue;
+                    }
+                }
+            };
+            if let Err(e) = std::fs::write(&backup_path, json) {
+                log::warn!("Autosave: failed to write {:?}: {}", backup_path, e);
+            } else {
+                log::info!("Autosaved to {:?}", backup_path);
+            }
+        }
+    });
+}
+
+/// Attempt an emergency save before the process exits.
+fn emergency_save(state: &SharedStateHandle) {
+    let (json, path) = {
+        let Ok(state) = state.lock() else { return };
+        let json = match serde_json::to_string_pretty(&state.show_file) {
+            Ok(j) => j,
+            Err(e) => {
+                log::error!("Emergency save: serialization failed: {}", e);
+                return;
+            }
+        };
+        (json, state.project_path.clone())
+    };
+
+    let dir = dirs::data_dir()
+        .unwrap_or_else(|| std::env::temp_dir())
+        .join("QPlayer");
+    let _ = std::fs::create_dir_all(&dir);
+
+    // Prefer crash_recovery.qproj, but if a project_path exists, also save there
+    let crash_path = dir.join("crash_recovery.qproj");
+    if let Err(e) = std::fs::write(&crash_path, &json) {
+        log::error!("Emergency save: failed to write {:?}: {}", crash_path, e);
+    } else {
+        log::info!("Emergency save written to {:?}", crash_path);
+    }
+
+    if let Some(project_path) = path {
+        if let Err(e) = std::fs::write(&project_path, &json) {
+            log::error!("Emergency save: failed to overwrite {:?}: {}", project_path, e);
+        } else {
+            log::info!("Emergency save overwritten {:?}", project_path);
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    // Single instance guard
+    let single = single_instance::SingleInstance::new("QPlayer_rust_port").unwrap();
+    if !single.is_single() {
+        log::warn!("Another instance of QPlayer is already running. Exiting.");
+        return Ok(());
+    }
+
+    human_panic::setup_panic!(
+        Metadata::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+            .authors("QPlayer Contributors")
+            .homepage("https://github.com/BlueJayLouche/QPlayer")
+    );
+
     env_logger::init();
 
     let event_loop = EventLoop::with_user_event().build()?;
@@ -731,6 +938,21 @@ fn main() -> anyhow::Result<()> {
     ))?;
 
     let mut app = App::new(instance, adapter, device, queue, proxy);
+
+    // Ctrl-C / SIGTERM handler for graceful emergency save
+    {
+        let state = Arc::clone(app.qplayer.state());
+        ctrlc::set_handler(move || {
+            log::info!("SIGINT received, performing emergency save...");
+            emergency_save(&state);
+            std::process::exit(0);
+        })?;
+    }
+
     event_loop.run_app(&mut app)?;
+
+    // Signal autosave thread to stop
+    app.autosave_running.store(false, Ordering::Relaxed);
+
     Ok(())
 }

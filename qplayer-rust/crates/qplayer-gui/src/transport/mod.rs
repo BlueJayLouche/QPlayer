@@ -59,6 +59,7 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                     crate::app::ShowMode::Edit => crate::app::ShowMode::Show,
                     crate::app::ShowMode::Show => crate::app::ShowMode::Edit,
                 };
+                state.dirty = true;
             }
         }
     });

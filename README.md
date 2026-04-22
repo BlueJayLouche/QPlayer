@@ -20,8 +20,12 @@ This repository contains a Rust port of the original [C# QPlayer](https://github
 | **MSC (MIDI Show Control over UDP)** | ✅ | MA-MSC packet parsing, device/executor/page filtering |
 | **Remote show-file transfer** | ✅ | 1 KB block transfer with ACK/NACK + retry |
 | **Plugin architecture** | 🏗️ | WASM sandbox (`wasmtime`) — Phase 6 |
-| **Undo / redo** | ⏳ | Planned for Phase 7 |
-| **Drag & drop** | ⏳ | Planned for Phase 7 |
+| **Save / Save As** | ✅ | `.qproj` serialization with dirty tracking |
+| **Autosave** | ✅ | 5 rotating backups every 60 s |
+| **Crash recovery** | ✅ | `human-panic` + SIGINT emergency save |
+| **Drag & drop** | ✅ | External audio/video files → new cues |
+| **Single instance** | ✅ | Prevents multiple app launches |
+| **Undo / redo** | ⏳ | Planned for future session |
 
 ---
 
@@ -129,7 +133,7 @@ cargo test -p qplayer-protocols #  6 tests — OSC router, MSC parser, block-tra
 | 4 — Integration + Video | A/V sync, dual window, `VideoCue` | ✅ Complete |
 | 5 — Protocols | OSC, MSC, remote control | ✅ Complete (6 tests) |
 | 6 — Plugins | WASM plugin ABI + port OSC/MagicQ | 🏗️ In progress |
-| 7 — Polish | Undo, drag-drop, packaging, docs | ⏳ Pending |
+| 7 — Polish (partial) | Save, autosave, crash recovery, drag-drop, single instance | 🟡 In Progress |
 
 See [`PORTING_GUIDE.md`](PORTING_GUIDE.md) for the full design rationale, NFR targets, and detailed phase breakdown.
 

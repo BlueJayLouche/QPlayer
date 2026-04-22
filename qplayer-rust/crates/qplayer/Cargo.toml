@@ -25,6 +25,7 @@ tokio = { workspace = true }
 log = { workspace = true }
 rust_decimal = { workspace = true }
 rosc = { workspace = true }
+serde_json = { workspace = true }
 env_logger = "0.11"
 winit = { workspace = true }
 wgpu = { workspace = true }
@@ -32,6 +33,9 @@ egui = { workspace = true }
 egui-winit = { workspace = true }
 egui-wgpu = { workspace = true }
 pollster = { workspace = true }
+human-panic = "2"
+ctrlc = "3"
+single-instance = "0.3"
 
 [dev-dependencies]
 env_logger = "0.11"
