@@ -145,6 +145,13 @@ impl Mixer {
         self.dirty.store(true, Ordering::Release);
     }
 
+    /// Stop and remove all inputs. Call from the main thread.
+    pub fn stop_all(&self) {
+        let mut inputs = self.inputs.lock().unwrap();
+        inputs.clear();
+        self.dirty.store(true, Ordering::Release);
+    }
+
     /// Refresh the snapshot if dirty. Call from the main thread between callbacks.
     pub fn refresh_snapshot(&self) {
         if self.dirty.swap(false, Ordering::Acquire) {

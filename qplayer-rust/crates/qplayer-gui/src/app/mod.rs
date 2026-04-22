@@ -160,6 +160,20 @@ pub enum AppCommand {
     SelectCue(Decimal),
     Undo,
     Redo,
+    AddCue { cue_type: CueType },
+    DeleteSelectedCue,
+    DuplicateSelectedCue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CueType {
+    Sound,
+    Video,
+    Stop,
+    Volume,
+    Group,
+    Dummy,
+    TimeCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,14 +220,46 @@ impl QPlayerApp {
         // Keyboard shortcuts
         ctx.input(|i| {
             let modifiers = i.modifiers;
+
+            // Undo / Redo
             if modifiers.command && i.key_pressed(egui::Key::Z) {
-                if modifiers.shift {
+                let cmd = if modifiers.shift { AppCommand::Redo } else { AppCommand::Undo };
+                if let Ok(mut state) = self.state.lock() {
+                    state.command_queue.push(cmd);
+                }
+            }
+
+            // Delete selected cue
+            if i.key_pressed(egui::Key::Delete) {
+                if let Ok(mut state) = self.state.lock() {
+                    state.command_queue.push(AppCommand::DeleteSelectedCue);
+                }
+            }
+
+            // Duplicate selected cue
+            if modifiers.command && i.key_pressed(egui::Key::D) {
+                if let Ok(mut state) = self.state.lock() {
+                    state.command_queue.push(AppCommand::DuplicateSelectedCue);
+                }
+            }
+
+            // Add new sound cue
+            if modifiers.command && i.key_pressed(egui::Key::T) {
+                if let Ok(mut state) = self.state.lock() {
+                    state.command_queue.push(AppCommand::AddCue { cue_type: CueType::Sound });
+                }
+            }
+
+            // Go / Stop / Pause (transport shortcuts)
+            if !modifiers.command && !modifiers.alt {
+                if i.key_pressed(egui::Key::Space) {
                     if let Ok(mut state) = self.state.lock() {
-                        state.command_queue.push(AppCommand::Redo);
+                        state.command_queue.push(AppCommand::Go);
                     }
-                } else {
+                }
+                if i.key_pressed(egui::Key::Escape) {
                     if let Ok(mut state) = self.state.lock() {
-                        state.command_queue.push(AppCommand::Undo);
+                        state.command_queue.push(AppCommand::Stop);
                     }
                 }
             }
@@ -374,17 +420,11 @@ impl QPlayerApp {
                         log::error!("Failed to save project: {}", e);
                     }
                 }
-                AppCommand::Go => {
-                    log::info!("Go!");
-                }
-                AppCommand::Stop => {
-                    log::info!("Stop");
-                }
-                AppCommand::Pause => {
-                    log::info!("Pause");
-                }
                 AppCommand::SelectCue(id) => {
                     if let Ok(mut state) = self.state.lock() {
+                        // Capture snapshot before switching cues so inspector edits are undoable
+                        let snapshot = Snapshot::from_state(&state);
+                        state.undo_redo.push(snapshot);
                         state.selected_cue_id = Some(id);
                     }
                 }
@@ -410,6 +450,112 @@ impl QPlayerApp {
                         }
                     }
                 }
+                AppCommand::AddCue { cue_type } => {
+                    if let Ok(mut state) = self.state.lock() {
+                        let snapshot = Snapshot::from_state(&state);
+                        state.undo_redo.push(snapshot);
+
+                        let next_qid = state
+                            .show_file
+                            .cues
+                            .iter()
+                            .map(|c| c.base().qid)
+                            .max()
+                            .unwrap_or(Decimal::ONE)
+                            + Decimal::ONE;
+
+                        let base = qplayer_core::CueBase {
+                            qid: next_qid,
+                            name: format!("New {:?} Cue", cue_type),
+                            ..Default::default()
+                        };
+
+                        let cue = match cue_type {
+                            CueType::Sound => qplayer_core::Cue::Sound {
+                                base,
+                                path: String::new(),
+                                start_time: qplayer_core::Timespan::ZERO,
+                                duration: qplayer_core::Timespan::ZERO,
+                                volume: 1.0,
+                                pan: 0.0,
+                                fade_in: 0.0,
+                                fade_out: 0.0,
+                                fade_type: qplayer_core::FadeType::Linear,
+                                eq: None,
+                            },
+                            CueType::Video => qplayer_core::Cue::Video {
+                                base,
+                                path: String::new(),
+                                start_time: qplayer_core::Timespan::ZERO,
+                                duration: qplayer_core::Timespan::ZERO,
+                                volume: 1.0,
+                                pan: 0.0,
+                                fade_in: 0.0,
+                                fade_out: 0.0,
+                                fade_type: qplayer_core::FadeType::Linear,
+                                eq: None,
+                            },
+                            CueType::Stop => qplayer_core::Cue::Stop {
+                                base,
+                                stop_qid: Decimal::ZERO,
+                                stop_mode: qplayer_core::StopMode::Immediate,
+                                fade_out_time: 0.0,
+                                fade_type: qplayer_core::FadeType::Linear,
+                            },
+                            CueType::Volume => qplayer_core::Cue::Volume {
+                                base,
+                                sound_qid: Decimal::ZERO,
+                                fade_time: 0.0,
+                                volume: 0.0,
+                                fade_type: qplayer_core::FadeType::Linear,
+                            },
+                            CueType::Group => qplayer_core::Cue::Group { base },
+                            CueType::Dummy => qplayer_core::Cue::Dummy { base },
+                            CueType::TimeCode => qplayer_core::Cue::TimeCode {
+                                base,
+                                start_time: qplayer_core::Timespan::ZERO,
+                                duration: qplayer_core::Timespan::ZERO,
+                            },
+                        };
+                        state.show_file.cues.push(cue);
+                        state.dirty = true;
+                    }
+                }
+                AppCommand::DeleteSelectedCue => {
+                    if let Ok(mut state) = self.state.lock() {
+                        if let Some(id) = state.selected_cue_id {
+                            let snapshot = Snapshot::from_state(&state);
+                            state.undo_redo.push(snapshot);
+                            state.show_file.cues.retain(|c| c.base().qid != id);
+                            state.selected_cue_id = None;
+                            state.dirty = true;
+                        }
+                    }
+                }
+                AppCommand::DuplicateSelectedCue => {
+                    if let Ok(mut state) = self.state.lock() {
+                        if let Some(cue) = state.selected_cue().cloned() {
+                            let snapshot = Snapshot::from_state(&state);
+                            state.undo_redo.push(snapshot);
+
+                            let mut new_cue = cue;
+                            let next_qid = state
+                                .show_file
+                                .cues
+                                .iter()
+                                .map(|c| c.base().qid)
+                                .max()
+                                .unwrap_or(Decimal::ONE)
+                                + Decimal::ONE;
+                            new_cue.base_mut().qid = next_qid;
+                            new_cue.base_mut().name.push_str(" (copy)");
+                            state.show_file.cues.push(new_cue);
+                            state.dirty = true;
+                        }
+                    }
+                }
+                // Go, Stop, Pause are handled by the main application (qplayer/src/main.rs)
+                _ => {}
             }
         }
     }

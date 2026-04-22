@@ -1,6 +1,6 @@
 //! Cue list — the main view replacing WPF's DataGrid.
 
-use crate::app::{AppCommand, SharedStateHandle};
+use crate::app::{AppCommand, CueType, SharedStateHandle};
 use egui::{Color32, RichText};
 use qplayer_core::Cue;
 use rust_decimal::Decimal;
@@ -17,6 +17,31 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
 
     ui.heading(format!("Cues ({})", cues.len()));
     ui.separator();
+
+    // Toolbar
+    if show_mode == crate::app::ShowMode::Edit {
+        ui.horizontal(|ui| {
+            if ui.button("+ Sound").clicked() {
+                queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Sound });
+            }
+            if ui.button("+ Video").clicked() {
+                queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Video });
+            }
+            if ui.button("+ Stop").clicked() {
+                queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Stop });
+            }
+            if ui.button("+ Volume").clicked() {
+                queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Volume });
+            }
+            if ui.button("+ Group").clicked() {
+                queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Group });
+            }
+            if ui.button("+ Dummy").clicked() {
+                queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Dummy });
+            }
+        });
+        ui.separator();
+    }
 
     // Header row
     ui.horizontal(|ui| {
@@ -77,6 +102,29 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                             egui::Sense::hover(),
                         );
                         ui.painter().rect_filled(rect, 4.0, colour);
+
+                        // Context menu (right-click)
+                        if show_mode == crate::app::ShowMode::Edit {
+                            response.context_menu(|ui| {
+                                if ui.button("Duplicate").clicked() {
+                                    queue_cmd(state, AppCommand::DuplicateSelectedCue);
+                                    ui.close();
+                                }
+                                if ui.button("Delete").clicked() {
+                                    queue_cmd(state, AppCommand::DeleteSelectedCue);
+                                    ui.close();
+                                }
+                                ui.separator();
+                                if ui.button("Add Sound Cue").clicked() {
+                                    queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Sound });
+                                    ui.close();
+                                }
+                                if ui.button("Add Video Cue").clicked() {
+                                    queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Video });
+                                    ui.close();
+                                }
+                            });
+                        }
                     });
                 });
         }
@@ -93,6 +141,12 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
 fn queue_select(state: &SharedStateHandle, qid: Decimal) {
     if let Ok(mut state) = state.lock() {
         state.command_queue.push(AppCommand::SelectCue(qid));
+    }
+}
+
+fn queue_cmd(state: &SharedStateHandle, cmd: AppCommand) {
+    if let Ok(mut state) = state.lock() {
+        state.command_queue.push(cmd);
     }
 }
 

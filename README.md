@@ -27,6 +27,9 @@ This repository contains a Rust port of the original [C# QPlayer](https://github
 | **Single instance** | ✅ | Prevents multiple app launches |
 | **WASM Plugin host** | ✅ | `wasmtime` sandbox, lifecycle hooks, crash isolation |
 | **Undo / redo** | ✅ | Snapshot-based history (50 deep), Ctrl+Z / Ctrl+Shift+Z |
+| **Editable inspector** | ✅ | Text inputs, sliders, combo boxes for all cue fields |
+| **Add / delete / duplicate cues** | ✅ | Toolbar, context menu, Ctrl+T/D, Delete key |
+| **Keyboard shortcuts** | ✅ | Space=Go, Esc=Stop, Del=Delete, Ctrl+Z/Shift+Z |
 
 ---
 

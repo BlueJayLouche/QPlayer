@@ -184,6 +184,11 @@ impl AudioEngine {
         self.mixer.playback_time()
     }
 
+    /// Stop all active audio inputs.
+    pub fn stop_all(&self) {
+        self.mixer.stop_all();
+    }
+
     /// Build a full per-cue processor chain from a decoder.
     ///
     /// Chain: Source → Loop → Resampler → Mono→Stereo → EQ → Fade → Pan → Mixer

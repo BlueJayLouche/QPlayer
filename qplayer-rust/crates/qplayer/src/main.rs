@@ -376,7 +376,7 @@ impl App {
         self.latest_video_frame = None;
         self.video_frame_dirty = false;
         self.video_start_clock = None;
-        // TODO: stop audio playback
+        self.audio_engine.stop_all();
     }
 
     fn handle_dropped_file(&mut self, path: &Path) {
