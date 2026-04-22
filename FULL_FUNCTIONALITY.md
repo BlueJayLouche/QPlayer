@@ -45,13 +45,13 @@ User can create, edit, delete, duplicate, and reorder cues entirely through the 
 | B.1 | **Stop audio** | `AudioEngine.stop_all()` | ✅ `Mixer::stop_all()` clears all inputs; wired to `App::stop_all()` | — |
 | B.2 | **Pause / Resume** | Pauses active cues, resumes from pause point | ✅ Toggles `MixerInput::active` on all active cues; toggle button in transport | — |
 | B.3 | **Preload** | Decode to specific time, pause, ready to go | ❌ Not implemented | C# has preload button + time field in left panel |
-| B.4 | **Cue state machine** | Ready → Delay → Playing → Paused → Done | ⚠️ Basic tracking via `ActiveCue` struct with `qid/name/input` and `paused` flag | Missing: `Ready`/`Delay`/`Playing`/`Done` states; no state transitions |
+| B.4 | **Cue state machine** | Ready → Delay → Playing → Paused → Done | ✅ `CueState` enum with state transitions; icons in active cues panel (▶/🔁/⏸/✓) | `qplayer/src/main.rs` |
 | B.5 | **Trigger modes** | Go / WithLast / AfterLast with delay | ✅ `WithLast` fires consecutive cues together; `AfterLast` auto-triggers chain when previous cue finishes naturally | — |
 | B.6 | **Stop cue behavior** | Find target by QID, apply fade-out | ✅ Finds target in `active_cues`, thread-based fade-out over `fade_out_time`, then deactivates | — |
 | B.7 | **Volume cue behavior** | Find target sound cue, apply volume fade | ✅ Finds target in `active_cues`, thread-based volume fade over `fade_time` to target dB | — |
 | B.8 | **Active cues panel** | Left panel showing running cues with live status | ✅ Left `SidePanel` with QID, name, pause indicator, and tiny volume meter | Minor: no per-cue progress bar, no individual stop/go/pause buttons |
 | B.9 | **Delay / Wait** | Per-cue `Delay` (`TimeSpan`) deferred start | ✅ Delay editor in inspector (0-60s drag); `DelayedCue` queue checked each frame | `qplayer/src/main.rs`, `qplayer-gui/src/inspector/mod.rs` |
-| B.10 | **Looping** | `LoopMode`: OneShot, Looped, LoopedInfinite, HoldLast | ❌ Not implemented | Data model has `loop_mode`/`loop_count` but runtime ignores it |
+| B.10 | **Looping** | `LoopMode`: OneShot, Looped, LoopedInfinite, HoldLast | ✅ `LoopProcessor` wired into `play_audio()` with start_time/duration trim | `qplayer-audio/src/decoder.rs`, `qplayer/src/main.rs` |
 | B.11 | **Playback progress** | Per-cue progress bar + time display in list | ✅ `MixerInput::position()/length()` synced to GUI; progress bars in active cues panel and cue list | `qplayer/src/main.rs`, `qplayer-gui/src/cue_list/mod.rs`, `qplayer-gui/src/active_cues/mod.rs` |
 
 ### Exit Criterion

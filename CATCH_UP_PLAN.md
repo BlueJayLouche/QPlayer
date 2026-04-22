@@ -34,7 +34,7 @@ This document tracks every feature gap between the Rust port and the C# QPlayer 
 | # | Feature | C# Behavior | Rust Gap | Target Files | Effort |
 |---|---------|-------------|----------|--------------|--------|
 | P1.1 | **Delay / Wait** | Per-cue `delay: TimeSpan` defers start by timer | ✅ Delay editor in inspector; `DelayedCue` queue checked each frame | `qplayer/src/main.rs`, `qplayer-gui/src/inspector/mod.rs` | Small |
-| P1.2 | **Looping** | `LoopMode`: OneShot/Looped/LoopedInfinite/HoldLast with `loopCount` | Model has `loop_mode`/`loop_count`; runtime ignores it | `qplayer-audio/src/decoder.rs`, `qplayer/src/main.rs` | Medium |
+| P1.2 | **Looping** | `LoopMode`: OneShot/Looped/LoopedInfinite/HoldLast with `loopCount` | ✅ `LoopProcessor` wired into `play_audio()`; start_time/duration trim points supported | `qplayer-audio/src/decoder.rs`, `qplayer/src/main.rs` | Medium |
 | P1.3 | **Preload** | Decode to specific time, pause, ready to go on next Go | No preload UI or runtime | `qplayer-gui/src/transport/mod.rs`, `qplayer/src/main.rs` | Medium |
 | P1.4 | **Playback progress** | Per-cue progress bar + elapsed/total time in cue list row | ✅ `MixerInput::position()/length()` synced to GUI; progress bars in active cues + cue list | `qplayer/src/main.rs`, `qplayer-gui/src/cue_list/mod.rs` | Small |
 | P1.5 | **Cue state machine** | Ready → Delay → Playing/PlayingLooped ↔ Paused → Done | Only basic `ActiveCue` with `paused` flag | `qplayer/src/main.rs` | Medium |
