@@ -197,6 +197,8 @@ pub struct SharedState {
     pub waveform_window_zoom: f32,
     /// Waveform window scroll offset in bars.
     pub waveform_window_scroll: f32,
+    /// Whether the Video Output window is open.
+    pub show_video_window: bool,
     /// List of loaded plugins (name, path) for the plugin manager window.
     pub plugin_list: Vec<(String, String)>,
     /// Progress overlay: if Some, shows a blocking modal with message + progress.
@@ -236,6 +238,7 @@ impl Default for SharedState {
             show_waveform_window: false,
             waveform_window_zoom: 1.0,
             waveform_window_scroll: 0.0,
+            show_video_window: false,
             plugin_list: Vec::new(),
             progress_overlay: None,
         }
@@ -297,6 +300,7 @@ pub enum AppCommand {
     MoveCue { from_idx: usize, to_idx: usize },
     SetLimiterThreshold(f32),
     SetAudioDevice(String),
+    ToggleVideoWindow,
     Preload,
     UpdateCueQid { qid: Decimal, new_qid: Decimal },
     UpdateCueName { qid: Decimal, name: String },
@@ -929,6 +933,17 @@ impl QPlayerApp {
                 if ui.checkbox(&mut show_waveform, "Waveform").clicked() {
                     if let Ok(mut state) = self.state.lock() {
                         state.show_waveform_window = show_waveform;
+                    }
+                    ui.close();
+                }
+                let mut show_video = {
+                    let Ok(state) = self.state.lock() else { return; };
+                    state.show_video_window
+                };
+                if ui.checkbox(&mut show_video, "Video Output").clicked() {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.show_video_window = show_video;
+                        state.command_queue.push(AppCommand::ToggleVideoWindow);
                     }
                     ui.close();
                 }

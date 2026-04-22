@@ -109,6 +109,7 @@ struct App {
     // ── polish ──
     last_window_title: String,
     autosave_running: Arc<AtomicBool>,
+    modifiers: winit::keyboard::ModifiersState,
 
     // ── plugins ──
     plugin_manager: Option<plugin_manager::PluginManager>,
@@ -253,6 +254,7 @@ impl App {
             paused: false,
             show_start_time: None,
             triggered_timecodes: Vec::new(),
+            modifiers: winit::keyboard::ModifiersState::empty(),
         }
     }
 
@@ -951,6 +953,20 @@ impl App {
                 AppCommand::Preload => {
                     self.handle_preload(event_loop);
                 }
+                AppCommand::ToggleVideoWindow => {
+                    if self.video_window.is_some() {
+                        // Hide/destroy
+                        self.video_window = None;
+                        self.video_surface = None;
+                        self.video_config = None;
+                        if let Some(ids) = self.window_ids.as_mut() {
+                            ids.video = None;
+                        }
+                    } else {
+                        // Show/create (even if no video is playing, show a black window)
+                        self.create_video_window(event_loop);
+                    }
+                }
                 AppCommand::SaveProject | AppCommand::SaveProjectAs { .. } => {
                     if let Some(pm) = self.plugin_manager.as_mut() {
                         pm.on_save();
@@ -1443,6 +1459,9 @@ impl ApplicationHandler<AppEvent> for App {
                         window.request_redraw();
                     }
                 }
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    self.modifiers = modifiers.state();
+                }
                 _ => {}
             }
         } else if is_video {
@@ -1454,6 +1473,27 @@ impl ApplicationHandler<AppEvent> for App {
                     if let Some(ids) = self.window_ids.as_mut() {
                         ids.video = None;
                     }
+                    if let Ok(mut state) = self.qplayer.state().lock() {
+                        state.show_video_window = false;
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. } => {
+                    if event.state == winit::event::ElementState::Pressed {
+                        let is_f = event.logical_key == winit::keyboard::Key::Character("f".into());
+                        if is_f && self.modifiers.control_key() {
+                            if let Some(window) = self.video_window.as_ref() {
+                                let currently_fullscreen = window.fullscreen().is_some();
+                                if currently_fullscreen {
+                                    window.set_fullscreen(None);
+                                } else {
+                                    window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                                }
+                            }
+                        }
+                    }
+                }
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    self.modifiers = modifiers.state();
                 }
                 WindowEvent::Resized(size) => {
                     if size.width > 0 && size.height > 0 {
