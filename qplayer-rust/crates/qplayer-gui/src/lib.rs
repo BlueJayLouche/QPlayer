@@ -7,3 +7,5 @@ pub mod cue_list;
 pub mod inspector;
 pub mod transport;
 pub mod waveform;
+
+pub use app::QPlayerApp;

@@ -9,10 +9,9 @@ description = "egui + wgpu user interface"
 
 [dependencies]
 qplayer-core = { workspace = true }
+eframe = { workspace = true }
 egui = { workspace = true }
-egui-wgpu = { workspace = true }
-egui-winit = { workspace = true }
-wgpu = { workspace = true }
-winit = { workspace = true }
-pollster = { workspace = true }
 log = { workspace = true }
+serde_json = { workspace = true }
+rust_decimal = { workspace = true }
+rfd = { workspace = true }

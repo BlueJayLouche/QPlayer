@@ -29,6 +29,7 @@ winit = "0.30"
 egui = "0.32"
 egui-wgpu = "0.32"
 egui-winit = "0.32"
+eframe = "0.32"
 pollster = "0.3"
 
 # Networking / Protocols

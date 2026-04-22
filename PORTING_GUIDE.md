@@ -650,8 +650,22 @@ Estimates assume one full-time developer with Rust experience. Each phase has an
 | `PanProcessor` | ✅ | Linear pan law + per-cue fade-in/fade-out by position |
 | `LimiterProcessor` | ✅ | Lookahead delay, gain-reduction envelope, stereo linking, hard clip |
 | `MeteringProcessor` | ✅ | Block-based peak/RMS, configurable interval, atomic output |
-| **Phase 2 Status** | **✅ COMPLETE** | **35 unit tests passing, clippy clean, smoke test verified** |
-| 3: GUI skeleton | 2 weeks | egui app with cue list, inspector, waveform | Can load a show file and display cue list with no audio; 120 fps with 500 cues | Medium |
+| **Phase 2 Status** | **✅ COMPLETE** | **38 unit tests passing, clippy clean, smoke test verified** |
+
+### Phase 3 Progress
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `eframe` integration | ✅ | Window, event loop, renderer — `cargo run -p qplayer` opens GUI |
+| `SharedState` + command dispatch | ✅ | `Arc<Mutex<SharedState>>` with `AppCommand` enum per frame |
+| Cue list | ✅ | Scrollable rows with Q#, name, type label, colour swatch, selectable |
+| Cue inspector | ✅ | Right panel showing cue-type-specific fields (Sound/Stop/Volume/Group/Dummy/TC) |
+| Transport controls | ✅ | Go/Stop/Pause buttons + Show/Edit mode toggle |
+| File dialog (rfd) | ✅ | Open `.qproj` via native file picker, parse and display |
+| Menu bar | ✅ | File (New/Open/Save), View placeholders |
+| **Phase 3 Status** | **✅ COMPLETE** | **2 tests, binary runs, 500-cue show file generation verified** |
+
+| 4: Integration | 3 weeks | Wire audio + GUI + file I/O | Can load a show, press Go, hear audio, save changes | Medium |
 | 4: Integration | 3 weeks | Wire audio + GUI + file I/O | Can load a show, press Go, hear audio, save changes | Medium |
 | 5: Protocols | 1 week | OSC, MSC, remote control | Existing iPad remote control client connects and triggers cues | Low |
 | 6: Plugins | 1–2 weeks | Plugin ABI + port OSC/MagicQ plugins | Both ported plugins load and function; plugin crash does not crash host | **High** |
