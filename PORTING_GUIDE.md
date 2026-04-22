@@ -44,7 +44,7 @@ These decisions are now locked and recorded. They block downstream phases as not
 | 3 | Plugin mechanism | WASM (`wasmtime`) | Sandboxed, memory-safe, cross-platform plugin execution. Higher overhead than dylib but eliminates crash-isolation concerns entirely. | Phase 5 |
 | 4 | MIDI breadth | Full MIDI I/O (`midir`) | Enables future MIDI controller integration, not just MSC. MagicQCTRL still uses HID (`hidapi`). | Phase 6 |
 | 5 | Remote control clients | Existing OSC protocol | iPad/Android remote clients work unchanged; no new protocol needed | Phase 6 |
-| 6 | Video support in scope? | Deferred | `VideoFile` is a placeholder in C#; revisit after audio parity achieved | Scope |
+| 6 | Video support in scope? | **Adopted** | `VideoCue` added to core model; `qplayer-video` crate provides FFmpeg video decode + wgpu fullscreen output. Dual-window architecture with audio-clock A/V sync. | Phase 4 |
 | 7 | Team size / calendar | 1 full-time dev | Estimate (§6.1) assumes 1 full-time Rust-experienced dev | Schedule |
 
 **Consequence of Decision 2 (ffmpeg-next):** The workspace uses `ffmpeg-next` 8.1 which supports FFmpeg 8.x. Build environment requires:
@@ -113,13 +113,14 @@ Qplayer-Csharp/
 └── docs/                       ← Astro docs site
 ```
 
-**Proposed Rust Workspace:**
+**Current Rust Workspace:**
 ```
 qplayer-rust/
 ├── Cargo.toml                  # Workspace definition
 ├── crates/
 │   ├── qplayer-core/           # Domain models + serialization
 │   ├── qplayer-audio/          # Audio engine (cpal + DSP)
+│   ├── qplayer-video/          # Video decode (FFmpeg) + wgpu output
 │   ├── qplayer-protocols/      # OSC, MSC, remote control
 │   ├── qplayer-plugin-api/     # Plugin ABI + loader
 │   ├── qplayer-gui/            # egui + wgpu UI
@@ -321,45 +322,52 @@ The cue list must support:
 - Render in custom egui painter callback or separate wgpu render pass
 - Show playhead position, selection regions, fade-in/out handles
 
-### 4.4 Phase 4: Application Orchestration (`qplayer` binary)
+### 4.4 Phase 4: Integration + Video (`qplayer` binary + `qplayer-video` crate)
 
-**Goal:** Wire everything together -- event loop, command dispatch, file I/O, undo/redo.
+**Goal:** Wire audio + GUI + video + file I/O into a single runnable application. Replace `eframe` with a custom `winit` event loop supporting dual windows.
 
-**Replaces:** `MainViewModel` (~1900 lines across 4 partial files), `App.xaml.cs`
+**Replaces:** `MainViewModel` (~1900 lines across 4 partial files), `App.xaml.cs`, C# `VideoFile` placeholder
 
-**Architecture:** Directly from rustjay-template.
+**Architecture:** Custom `winit` `ApplicationHandler` with shared `wgpu::Device` across two windows.
 
 ```rust
 pub struct App {
-    shared_state: Arc<Mutex<SharedState>>,
-    audio_engine: AudioEngine,
-    osc_manager: OscManager,
-    msc_manager: MscManager,
-    plugin_loader: PluginLoader,
-    undo_manager: UndoManager,
-    // ...
-}
+    // Shared wgpu context (both windows use same device/queue)
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
 
-// winit ApplicationHandler
-impl ApplicationHandler for App {
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // 1. Process pending commands from GUI / OSC / MIDI / plugins
-        self.process_commands();
-        
-        // 2. Update active cue states (was 40ms timer in C#)
-        self.update_active_cues();
-        
-        // 3. Slow update (was 250ms timer): autosave, plugin OnSlowUpdate
-        self.slow_update();
-        
-        // 4. Render GUI
-        self.gui.render();
-        
-        // 5. Request next frame
-        event_loop.set_control_flow(ControlFlow::Poll);
-    }
+    // Control window (egui UI)
+    control_window: Option<Arc<Window>>,
+    control_surface: Option<wgpu::Surface<'static>>,
+    egui_state: Option<egui_winit::State>,
+    egui_renderer: Option<egui_wgpu::Renderer>,
+
+    // Video output window (lazy-created borderless fullscreen)
+    video_window: Option<Arc<Window>>,
+    video_surface: Option<wgpu::Surface<'static>>,
+    video_texture: Option<qplayer_video::Texture>,
+    video_renderer: Option<qplayer_video::Renderer>,
+
+    // Application state
+    qplayer: QPlayerApp,          // egui UI logic
+    audio_engine: AudioEngine,
+
+    // Video playback state
+    latest_video_frame: Option<VideoFrame>,
+    video_start_clock: Option<Duration>,
+    video_stop_flag: Arc<AtomicBool>,
 }
 ```
+
+**A/V Sync:** The audio `Mixer` maintains an `AtomicU64` frame counter incremented in the cpal callback. `playback_time()` converts frames to `Duration`. The video decode thread captures the audio clock at playback start, then sleeps until `frame.PTS <= elapsed_audio_time` before sending the frame to the main thread via `EventLoopProxy<AppEvent>`.
+
+**Dual window rendering:**
+- Control window: `egui_winit::State` handles input → `egui::Context::run()` → `egui_wgpu::Renderer::render()` (with `render_pass.forget_lifetime()`)
+- Video window: `qplayer_video::Texture::upload()` → `qplayer_video::Renderer::render()` blits the RGBA frame as a fullscreen quad
+
+**Key change from original plan:** `eframe` was replaced with direct `winit` + `egui-winit` + `egui-wgpu` because macOS requires the event loop on the main thread and `eframe` does not expose multi-window creation.
 
 **Command dispatch pattern (from rustjay):**
 
@@ -656,7 +664,7 @@ Estimates assume one full-time developer with Rust experience. Each phase has an
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `eframe` integration | ✅ | Window, event loop, renderer — `cargo run -p qplayer` opens GUI |
+| `eframe` integration | ✅ | Used in Phase 3; replaced with direct `winit` + `egui-winit` in Phase 4 for dual-window support |
 | `SharedState` + command dispatch | ✅ | `Arc<Mutex<SharedState>>` with `AppCommand` enum per frame |
 | Cue list | ✅ | Scrollable rows with Q#, name, type label, colour swatch, selectable |
 | Cue inspector | ✅ | Right panel showing cue-type-specific fields (Sound/Stop/Volume/Group/Dummy/TC) |
@@ -665,12 +673,26 @@ Estimates assume one full-time developer with Rust experience. Each phase has an
 | Menu bar | ✅ | File (New/Open/Save), View placeholders |
 | **Phase 3 Status** | **✅ COMPLETE** | **2 tests, binary runs, 500-cue show file generation verified** |
 
-| 4: Integration | 3 weeks | Wire audio + GUI + file I/O | Can load a show, press Go, hear audio, save changes | Medium |
-| 4: Integration | 3 weeks | Wire audio + GUI + file I/O | Can load a show, press Go, hear audio, save changes | Medium |
-| 5: Protocols | 1 week | OSC, MSC, remote control | Existing iPad remote control client connects and triggers cues | Low |
-| 6: Plugins | 1–2 weeks | Plugin ABI + port OSC/MagicQ plugins | Both ported plugins load and function; plugin crash does not crash host | **High** |
-| 7: Polish | 2 weeks | Undo, drag-drop, packaging, docs | Installers built on all 3 OSes; NFR regression suite green | Low |
-| **Total** | **15–18 weeks** | **Feature-complete Rust QPlayer** | NFRs met; C# feature parity checklist 100% | |
+### Phase 4 Progress
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Audio master clock | ✅ | `AtomicU64` frame counter in `Mixer`; `playback_time() -> Duration` on `Mixer` + `AudioEngine` |
+| Video decoder (`VideoSource`) | ✅ | FFmpeg video stream decode + `sws_scale` → RGBA frames |
+| Video output window | ✅ | Lazy-created borderless fullscreen winit window with dedicated wgpu surface |
+| Video texture upload | ✅ | Double-buffered RGBA texture via `qplayer_video::Texture` |
+| Video blit renderer | ✅ | Fullscreen textured quad `Renderer` with WGSL shader |
+| A/V sync | ✅ | Decode thread sleeps until `frame.PTS <= audio_clock`; sends frames via winit `UserEvent` |
+| Dual-window event loop | ✅ | Custom `winit` `ApplicationHandler` replaces `eframe`; manages control + video windows |
+| `VideoCue` model | ✅ | Same fields as `SoundCue` (path, volume, pan, fade, EQ); serde round-trip tested |
+| End-to-end playback | ✅ | `Go` on `VideoCue` opens audio decoder + video source simultaneously; audio clock is sync master |
+| **Phase 4 Status** | **✅ COMPLETE** | **22 core + 38 audio + 2 GUI tests passing; dual-window binary compiles** |
+
+| 4: Integration + Video | 3 weeks | Wire audio + GUI + video + file I/O | Can load a show, press Go, hear audio + see video, save changes | Medium | ✅ **Complete** |
+| 5: Protocols | 1 week | OSC, MSC, remote control | Existing iPad remote control client connects and triggers cues | Low | ⏳ **Pending** |
+| 6: Plugins | 1–2 weeks | Plugin ABI + port OSC/MagicQ plugins | Both ported plugins load and function; plugin crash does not crash host | **High** | ⏳ **Pending** |
+| 7: Polish | 2 weeks | Undo, drag-drop, packaging, docs | Installers built on all 3 OSes; NFR regression suite green | Low | ⏳ **Pending** |
+| **Total** | **15–18 weeks** | **Feature-complete Rust QPlayer** | NFRs met; C# feature parity checklist 100% | | |
 
 **Rollback:** if a phase misses its exit criterion by > 20%, halt and re-evaluate scope before advancing. The phased crate split means earlier phases remain shippable as libraries even if later phases slip.
 
@@ -997,7 +1019,7 @@ log = "0.4"
 
 # Audio
 cpal = "0.15"
-ffmpeg-next = "7.0"
+ffmpeg-next = "8.1"
 rubato = "0.16"
 
 # GPU / UI
@@ -1038,8 +1060,9 @@ panic = "abort"
 | `qplayer-audio` | `cpal`, `ffmpeg-next`, `rubato`, `log`, `crossbeam` | Real-time audio |
 | `qplayer-protocols` | `rosc`, `tokio`, `log` | OSC/MSC networking |
 | `qplayer-plugin-api` | `serde`, `serde_json` | ABI types |
-| `qplayer-gui` | `egui`, `egui-wgpu`, `egui-winit`, `wgpu`, `winit`, `pollster` | UI |
-| `qplayer` | All above + `anyhow`, `dirs`, `rfd`, `tokio` | Orchestration |
+| `qplayer-video` | `ffmpeg-next`, `wgpu`, `winit`, `bytemuck` | Video decode + wgpu output |
+| `qplayer-gui` | `egui`, `egui-wgpu`, `egui-winit`, `wgpu`, `winit` | UI (no longer depends on `eframe`) |
+| `qplayer` | All above + `anyhow`, `dirs`, `rfd`, `tokio`, `pollster` | Orchestration |
 
 ---
 
@@ -1131,7 +1154,7 @@ strategy:
 
 ---
 
-*Document version: 1.1*
+*Document version: 1.2*
 *Created: 2026-04-22*
-*Last revised: 2026-04-22 (architect review — added NFRs, moved decisions to §0, de-duplicated plugin ABI, added phase exit criteria and Phase 0 gate)*
-*Next review: After Phase 0 spike completion*
+*Last revised: 2026-04-22 (Phase 4 complete — A/V sync, dual-window video playback, VideoCue model, custom winit event loop)*
+*Next review: After Phase 5 (Protocols) completion*
