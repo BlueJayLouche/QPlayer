@@ -6,8 +6,9 @@
 //! - Video decode: background thread that sleeps until frame PTS, then sends
 //!   frame to main thread via winit user event.
 
-use qplayer_audio::{AudioEngine, FfmpegDecoder};
+use qplayer_audio::{AudioEngine, FfmpegDecoder, SampleProvider};
 use qplayer_gui::{AppCommand, QPlayerApp, SharedStateHandle};
+use qplayer_gui::app::CueState;
 use qplayer_protocols::msc::{MscCommandFlags, MscEvent, MscManager};
 use qplayer_protocols::osc::{OscEvent, OscManager};
 use qplayer_video::{Renderer, Texture, VideoFrame, VideoSource};
@@ -45,6 +46,7 @@ struct ActiveCue {
     qid: rust_decimal::Decimal,
     name: String,
     input: std::sync::Arc<qplayer_audio::MixerInput>,
+    state: CueState,
 }
 
 /// A cue that is waiting for its delay timer to expire before playing.
@@ -401,13 +403,13 @@ impl App {
         }
 
         match cue {
-            qplayer_core::Cue::Sound { path, .. } => {
+            qplayer_core::Cue::Sound { path, start_time, duration, .. } => {
                 log::info!("Go SoundCue: {}", path);
-                self.play_audio(path, qid, &name);
+                self.play_audio(path, qid, &name, cue.base().loop_mode, cue.base().loop_count, *start_time, *duration);
             }
-            qplayer_core::Cue::Video { path, .. } => {
+            qplayer_core::Cue::Video { path, start_time, duration, .. } => {
                 log::info!("Go VideoCue: {}", path);
-                self.play_audio(path, qid, &name);
+                self.play_audio(path, qid, &name, cue.base().loop_mode, cue.base().loop_count, *start_time, *duration);
                 self.play_video(path, event_loop);
             }
             qplayer_core::Cue::Stop { stop_qid, fade_out_time, fade_type, .. } => {
@@ -424,11 +426,34 @@ impl App {
         }
     }
 
-    fn play_audio(&mut self, path: &str, qid: rust_decimal::Decimal, name: &str) {
+    fn play_audio(
+        &mut self,
+        path: &str,
+        qid: rust_decimal::Decimal,
+        name: &str,
+        loop_mode: qplayer_core::LoopMode,
+        loop_count: i32,
+        start_time: qplayer_core::Timespan,
+        duration: qplayer_core::Timespan,
+    ) {
         match FfmpegDecoder::open(path) {
             Ok(decoder) => {
-                let input = self.audio_engine.play(Box::new(decoder));
-                self.active_cues.push(ActiveCue { qid, name: name.to_string(), input });
+                let sample_rate = decoder.sample_rate();
+                let loop_proc = qplayer_audio::LoopProcessor::new(Box::new(decoder));
+                let start_frame = (start_time.as_secs_f64() * sample_rate as f64) as u64;
+                let end_frame = if duration.as_secs_f64() > 0.0 {
+                    start_frame + (duration.as_secs_f64() * sample_rate as f64) as u64
+                } else {
+                    0 // auto-detect from source length
+                };
+                loop_proc.set_loop(start_frame, end_frame, loop_mode, loop_count as u32);
+                let input = self.audio_engine.play(Box::new(loop_proc));
+                let state = if loop_mode == qplayer_core::LoopMode::Looped || loop_mode == qplayer_core::LoopMode::LoopedInfinite {
+                    CueState::PlayingLooped
+                } else {
+                    CueState::Playing
+                };
+                self.active_cues.push(ActiveCue { qid, name: name.to_string(), input, state });
             }
             Err(e) => {
                 log::error!("Failed to open audio for {}: {}", path, e);
@@ -491,11 +516,17 @@ impl App {
 
     /// Check for cues that have finished playing naturally and trigger AfterLast chains.
     fn check_finished_cues(&mut self, event_loop: &ActiveEventLoop) {
-        // Collect finished cue QIDs without borrowing self mutably in the loop
-        let finished_qids: Vec<rust_decimal::Decimal> = self.active_cues.iter()
-            .filter(|ac| ac.input.is_finished())
-            .map(|ac| ac.qid)
-            .collect();
+        // Mark finished cues as Done and collect their QIDs
+        let finished_qids: Vec<rust_decimal::Decimal> = {
+            let mut qids = Vec::new();
+            for ac in &mut self.active_cues {
+                if ac.input.is_finished() {
+                    ac.state = CueState::Done;
+                    qids.push(ac.qid);
+                }
+            }
+            qids
+        };
 
         for qid in finished_qids {
             // Remove finished cue from active list
@@ -604,16 +635,22 @@ impl App {
     }
 
     fn pause_all(&mut self) {
-        for ac in &self.active_cues {
+        for ac in &mut self.active_cues {
             ac.input.set_active(false);
+            if ac.state == CueState::Playing || ac.state == CueState::PlayingLooped {
+                ac.state = CueState::Paused;
+            }
         }
         self.paused = true;
         log::info!("Paused {} cue(s)", self.active_cues.len());
     }
 
     fn resume_all(&mut self) {
-        for ac in &self.active_cues {
+        for ac in &mut self.active_cues {
             ac.input.set_active(true);
+            if ac.state == CueState::Paused {
+                ac.state = CueState::Playing;
+            }
         }
         self.paused = false;
         log::info!("Resumed {} cue(s)", self.active_cues.len());
@@ -904,6 +941,7 @@ impl App {
                     paused: !ac.input.is_active(),
                     position: ac.input.position(),
                     length: ac.input.length(),
+                    state: ac.state,
                 }
             }).collect();
             if let Ok(mut state) = self.qplayer.state().lock() {

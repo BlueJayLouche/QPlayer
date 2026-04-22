@@ -96,6 +96,18 @@ impl Default for UndoRedo {
     }
 }
 
+/// Runtime state of an active cue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CueState {
+    #[default]
+    Ready,
+    Delay,
+    Playing,
+    PlayingLooped,
+    Paused,
+    Done,
+}
+
 /// Lightweight info about a cue currently playing, synced from the audio engine.
 #[derive(Debug, Clone, Default)]
 pub struct ActiveCueInfo {
@@ -109,6 +121,8 @@ pub struct ActiveCueInfo {
     pub position: usize,
     /// Total length in samples, if known.
     pub length: Option<usize>,
+    /// Runtime state.
+    pub state: CueState,
 }
 
 /// Master meter data synced from the audio engine.

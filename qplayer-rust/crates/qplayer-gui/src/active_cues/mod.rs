@@ -34,6 +34,17 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                         ui.set_min_height(24.0);
 
                         ui.horizontal(|ui| {
+                            // State indicator
+                            let state_icon = match cue.state {
+                                crate::app::CueState::Ready => "○",
+                                crate::app::CueState::Delay => "◐",
+                                crate::app::CueState::Playing => "▶",
+                                crate::app::CueState::PlayingLooped => "🔁",
+                                crate::app::CueState::Paused => "⏸",
+                                crate::app::CueState::Done => "✓",
+                            };
+                            ui.label(RichText::new(state_icon).monospace().size(12.0));
+
                             // Q# + name
                             let label = format!("Q{}  {}", qid_str, cue.name);
                             let mut text = RichText::new(label).monospace().size(12.0);
