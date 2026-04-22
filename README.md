@@ -26,7 +26,7 @@ This repository contains a Rust port of the original [C# QPlayer](https://github
 | **Drag & drop** | ✅ | External audio/video files → new cues |
 | **Single instance** | ✅ | Prevents multiple app launches |
 | **WASM Plugin host** | ✅ | `wasmtime` sandbox, lifecycle hooks, crash isolation |
-| **Undo / redo** | ⏳ | Planned for future session |
+| **Undo / redo** | ✅ | Snapshot-based history (50 deep), Ctrl+Z / Ctrl+Shift+Z |
 
 ---
 
@@ -135,7 +135,7 @@ cargo test -p qplayer-protocols #  6 tests — OSC router, MSC parser, block-tra
 | 5 — Protocols | OSC, MSC, remote control | ✅ Complete (6 tests) |
 | 6 — Plugins | WASM plugin ABI + port OSC/MagicQ | 🏗️ In progress |
 | 6 — Plugins | WASM plugin host with lifecycle hooks, hello-plugin example | ✅ Complete |
-| 7 — Polish (partial) | Save, autosave, crash recovery, drag-drop, single instance | 🟡 In Progress |
+| 7 — Polish | Save, autosave, crash recovery, drag-drop, single instance, undo/redo | ✅ Complete |
 
 See [`PORTING_GUIDE.md`](PORTING_GUIDE.md) for the full design rationale, NFR targets, and detailed phase breakdown.
 

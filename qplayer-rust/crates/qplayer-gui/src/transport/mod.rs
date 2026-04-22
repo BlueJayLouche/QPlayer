@@ -55,6 +55,8 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
             .min_size(Vec2::new(100.0, 32.0));
         if ui.add(mode_btn).clicked() {
             if let Ok(mut state) = state.lock() {
+                let snapshot = crate::app::Snapshot::from_state(&state);
+                state.undo_redo.push(snapshot);
                 state.show_mode = match state.show_mode {
                     crate::app::ShowMode::Edit => crate::app::ShowMode::Show,
                     crate::app::ShowMode::Show => crate::app::ShowMode::Edit,

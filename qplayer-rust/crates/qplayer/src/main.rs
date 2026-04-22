@@ -402,6 +402,9 @@ impl App {
             .to_string();
 
         if let Ok(mut state) = self.qplayer.state().lock() {
+            let snapshot = qplayer_gui::app::Snapshot::from_state(&state);
+            state.undo_redo.push(snapshot);
+
             let next_qid = state
                 .show_file
                 .cues

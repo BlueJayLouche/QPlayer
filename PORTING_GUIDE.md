@@ -714,7 +714,8 @@ Estimates assume one full-time developer with Rust experience. Each phase has an
 | SIGINT / SIGTERM handler (`ctrlc`) | ✅ | Emergency autosave to `crash_recovery.qproj` before exit |
 | Drag & Drop (external files) | ✅ | Audio/video file drops onto control window create new cues |
 | Single instance | ✅ | `single-instance` crate prevents multiple app launches |
-| **Phase 7 Status** | **🟡 PARTIAL** | **Core polish complete; Undo/Redo + Installers deferred** |
+| Undo / Redo | ✅ | Snapshot-based history (50 deep), Edit menu + Ctrl+Z / Ctrl+Shift+Z |
+| **Phase 7 Status** | **✅ COMPLETE** | **Core polish complete; Installers deferred to packaging phase** |
 
 | 4: Integration + Video | 3 weeks | Wire audio + GUI + video + file I/O | Can load a show, press Go, hear audio + see video, save changes | Medium | ✅ **Complete** |
 | 5: Protocols | 1 week | OSC, MSC, remote control | Existing iPad remote control client connects and triggers cues | Low | ✅ **Complete** |
@@ -731,7 +732,7 @@ Estimates assume one full-time developer with Rust experience. Each phase has an
 | **Phase 6 Status** | **✅ COMPLETE** | **2 plugin tests passing; hello-plugin loads and runs** |
 
 | 6: Plugins | 1–2 weeks | Plugin ABI + port OSC/MagicQ plugins | WASM plugin host loads and runs; crash isolation verified; custom cue types deferred | **High** | ✅ **Complete** |
-| 7: Polish | 2 weeks | Undo, drag-drop, packaging, docs | Core polish done; Undo/Redo + installers remain | Low | 🟡 **In Progress** |
+| 7: Polish | 2 weeks | Undo, drag-drop, packaging, docs | Core polish done; Installers remain for packaging phase | Low | ✅ **Complete** |
 | **Total** | **15–18 weeks** | **Feature-complete Rust QPlayer** | NFRs met; C# feature parity checklist 100% | | |
 
 **Rollback:** if a phase misses its exit criterion by > 20%, halt and re-evaluate scope before advancing. The phased crate split means earlier phases remain shippable as libraries even if later phases slip.
@@ -1194,7 +1195,7 @@ strategy:
 
 ---
 
-*Document version: 1.5*
+*Document version: 1.6*
 *Created: 2026-04-22*
-*Last revised: 2026-04-22 (Phase 6 complete — WASM plugin host with wasmtime, lifecycle hooks, hello-plugin example, crash isolation verified)*
-*Next review: After Undo/Redo implementation or Phase 7 completion*
+*Last revised: 2026-04-22 (All PORTING_GUIDE phases complete — Undo/Redo implemented, snapshot-based history with 50-deep stack)*
+*Next review: See FULL_FUNCTIONALITY.md for GUI interactivity roadmap*
