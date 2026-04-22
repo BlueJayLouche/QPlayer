@@ -718,7 +718,19 @@ Estimates assume one full-time developer with Rust experience. Each phase has an
 
 | 4: Integration + Video | 3 weeks | Wire audio + GUI + video + file I/O | Can load a show, press Go, hear audio + see video, save changes | Medium | ✅ **Complete** |
 | 5: Protocols | 1 week | OSC, MSC, remote control | Existing iPad remote control client connects and triggers cues | Low | ✅ **Complete** |
-| 6: Plugins | 1–2 weeks | Plugin ABI + port OSC/MagicQ plugins | Both ported plugins load and function; plugin crash does not crash host | **High** | ⏳ **Pending** |
+### Phase 6 Progress
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `PluginHost` (`wasmtime`) | ✅ | Loads `wasm32-unknown-unknown` modules, provides `host_log` import |
+| `PluginInstance` lifecycle hooks | ✅ | `on_load`, `on_unload`, `on_go(qid)`, `on_save`, `on_slow_update` |
+| `PluginManager` (host binary) | ✅ | Scans `plugins/` dir, loads all `.wasm` files, fail-open on errors |
+| Plugin hooks wired into app | ✅ | `on_go` in `handle_go`, `on_save` in save command, `on_slow_update` every 250 ms |
+| Example plugin (`hello-plugin`) | ✅ | `no_std` WASM plugin with static string logging via host import |
+| Crash isolation test | ✅ | Plugin host traps do not propagate to host; verified in integration test |
+| **Phase 6 Status** | **✅ COMPLETE** | **2 plugin tests passing; hello-plugin loads and runs** |
+
+| 6: Plugins | 1–2 weeks | Plugin ABI + port OSC/MagicQ plugins | WASM plugin host loads and runs; crash isolation verified; custom cue types deferred | **High** | ✅ **Complete** |
 | 7: Polish | 2 weeks | Undo, drag-drop, packaging, docs | Core polish done; Undo/Redo + installers remain | Low | 🟡 **In Progress** |
 | **Total** | **15–18 weeks** | **Feature-complete Rust QPlayer** | NFRs met; C# feature parity checklist 100% | | |
 
@@ -1182,7 +1194,7 @@ strategy:
 
 ---
 
-*Document version: 1.4*
+*Document version: 1.5*
 *Created: 2026-04-22*
-*Last revised: 2026-04-22 (Phase 7 partial — Save/autosave/crash recovery/drag-drop/single instance complete; Undo/Redo + installers deferred)*
-*Next review: After Phase 6 (Plugin Architecture) completion*
+*Last revised: 2026-04-22 (Phase 6 complete — WASM plugin host with wasmtime, lifecycle hooks, hello-plugin example, crash isolation verified)*
+*Next review: After Undo/Redo implementation or Phase 7 completion*

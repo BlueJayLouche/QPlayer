@@ -23,6 +23,8 @@ use winit::window::{Window, WindowId};
 
 use human_panic::Metadata;
 
+mod plugin_manager;
+
 /// User events sent to the main event loop from background threads.
 #[derive(Debug)]
 enum AppEvent {
@@ -87,6 +89,10 @@ struct App {
     // ── polish ──
     last_window_title: String,
     autosave_running: Arc<AtomicBool>,
+
+    // ── plugins ──
+    plugin_manager: Option<plugin_manager::PluginManager>,
+    last_slow_update: Instant,
 }
 
 impl App {
@@ -150,6 +156,15 @@ impl App {
         let autosave_running = Arc::new(AtomicBool::new(true));
         spawn_autosave_thread(Arc::clone(&qplayer.state()), Arc::clone(&autosave_running));
 
+        let mut plugin_manager = plugin_manager::PluginManager::new().ok();
+        if let Some(pm) = plugin_manager.as_mut() {
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            pm.load_from_dir(&exe_dir.join("plugins"));
+        }
+
         Self {
             instance,
             adapter,
@@ -181,6 +196,8 @@ impl App {
             last_discovery: Instant::now(),
             last_window_title: String::new(),
             autosave_running,
+            plugin_manager,
+            last_slow_update: Instant::now(),
         }
     }
 
@@ -288,6 +305,11 @@ impl App {
             log::info!("Go pressed but no cue selected");
             return;
         };
+
+        let qid_i32: i32 = cue.base().qid.try_into().unwrap_or(0);
+        if let Some(pm) = self.plugin_manager.as_mut() {
+            pm.on_go(qid_i32);
+        }
 
         match cue {
             qplayer_core::Cue::Sound { path, .. } => {
@@ -442,6 +464,11 @@ impl App {
             match cmd {
                 AppCommand::Go => self.handle_go(event_loop),
                 AppCommand::Stop => self.stop_all(),
+                AppCommand::SaveProject | AppCommand::SaveProjectAs { .. } => {
+                    if let Some(pm) = self.plugin_manager.as_mut() {
+                        pm.on_save();
+                    }
+                }
                 _ => {}
             }
         }
@@ -758,6 +785,14 @@ impl ApplicationHandler<AppEvent> for App {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         self.process_protocol_events();
 
+        // Plugin slow update every 250 ms
+        if self.last_slow_update.elapsed() >= Duration::from_millis(250) {
+            self.last_slow_update = Instant::now();
+            if let Some(pm) = self.plugin_manager.as_mut() {
+                pm.on_slow_update();
+            }
+        }
+
         // Continuously redraw both windows when active.
         if let Some(window) = self.control_window.as_ref() {
             window.request_redraw();
@@ -950,6 +985,11 @@ fn main() -> anyhow::Result<()> {
     }
 
     event_loop.run_app(&mut app)?;
+
+    // Notify plugins before shutdown
+    if let Some(pm) = app.plugin_manager.as_mut() {
+        pm.on_unload();
+    }
 
     // Signal autosave thread to stop
     app.autosave_running.store(false, Ordering::Relaxed);
