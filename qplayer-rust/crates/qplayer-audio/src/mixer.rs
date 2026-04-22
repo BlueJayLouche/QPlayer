@@ -50,6 +50,8 @@ pub struct MixerInput {
     pan: AtomicU32,
     /// Set to false to remove from mixing. The audio callback skips inactive inputs.
     active: AtomicBool,
+    /// Set to true when the source has returned 0 samples (EOF reached).
+    finished: AtomicBool,
     /// Temporary buffer for reading from the source before mixing.
     /// Sized to the maximum expected callback buffer.
     temp_buffer: Mutex<Vec<f32>>,
@@ -62,6 +64,7 @@ impl MixerInput {
             volume: AtomicU32::new(1.0f32.to_bits()),
             pan: AtomicU32::new(0.0f32.to_bits()),
             active: AtomicBool::new(true),
+            finished: AtomicBool::new(false),
             temp_buffer: Mutex::new(vec![0.0f32; max_buffer_samples]),
         }
     }
@@ -94,6 +97,11 @@ impl MixerInput {
     #[inline]
     pub fn set_active(&self, active: bool) {
         self.active.store(active, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::Relaxed)
     }
 }
 
@@ -195,6 +203,7 @@ impl Mixer {
 
             let read = input.source.read(&mut temp[..needed]);
             if read == 0 {
+                input.finished.store(true, Ordering::Relaxed);
                 continue;
             }
 

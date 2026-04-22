@@ -40,6 +40,13 @@ struct WindowIds {
     video: Option<WindowId>,
 }
 
+#[derive(Clone)]
+struct ActiveCue {
+    qid: rust_decimal::Decimal,
+    name: String,
+    input: std::sync::Arc<qplayer_audio::MixerInput>,
+}
+
 struct App {
     // ── wgpu core ──
     instance: wgpu::Instance,
@@ -68,6 +75,8 @@ struct App {
 
     // ── audio ──
     audio_engine: AudioEngine,
+    active_cues: Vec<ActiveCue>,
+    paused: bool,
 
     // ── video playback ──
     event_loop_proxy: winit::event_loop::EventLoopProxy<AppEvent>,
@@ -105,6 +114,16 @@ impl App {
     ) -> Self {
         let audio_engine = AudioEngine::new_default().expect("audio engine init failed");
         let qplayer = QPlayerApp::new();
+
+        // Sync audio device info into GUI state
+        {
+            let devices: Vec<String> = AudioEngine::list_devices().into_iter().map(|(n, _)| n).collect();
+            let device_name = audio_engine.device_name().to_string();
+            if let Ok(mut state) = qplayer.state().lock() {
+                state.audio_devices = devices;
+                state.audio_device_name = device_name;
+            }
+        }
 
         // Default protocol settings (TODO: load from project settings)
         let nic = Ipv4Addr::new(127, 0, 0, 1);
@@ -198,6 +217,8 @@ impl App {
             autosave_running,
             plugin_manager,
             last_slow_update: Instant::now(),
+            active_cues: Vec::new(),
+            paused: false,
         }
     }
 
@@ -295,46 +316,226 @@ impl App {
 
 
     /// Handle a `Go` command: start audio (and video if cue is VideoCue).
+    /// Also handles `WithLast` trigger mode for subsequent cues.
     fn handle_go(&mut self, event_loop: &ActiveEventLoop) {
-        let cue = {
+        let (start_qid, start_idx) = {
             let state = self.qplayer.state().lock().unwrap();
-            state.selected_cue().cloned()
+            let qid = state.selected_cue_id;
+            let idx = qid.and_then(|q| state.show_file.cues.iter().position(|c| c.base().qid == q));
+            (qid, idx)
         };
 
-        let Some(cue) = cue else {
+        let Some(start_qid) = start_qid else {
             log::info!("Go pressed but no cue selected");
             return;
         };
+        let Some(start_idx) = start_idx else {
+            log::warn!("Selected cue Q{} not found in cue list", start_qid);
+            return;
+        };
 
-        let qid_i32: i32 = cue.base().qid.try_into().unwrap_or(0);
+        let qid_i32: i32 = start_qid.try_into().unwrap_or(0);
         if let Some(pm) = self.plugin_manager.as_mut() {
             pm.on_go(qid_i32);
         }
 
+        // Play the selected cue and all consecutive WithLast followers
+        let cues_to_play = {
+            let state = self.qplayer.state().lock().unwrap();
+            let mut result = Vec::new();
+            for i in start_idx..state.show_file.cues.len() {
+                let cue = &state.show_file.cues[i];
+                if i == start_idx || cue.base().trigger == qplayer_core::TriggerMode::WithLast {
+                    result.push(cue.clone());
+                } else {
+                    break;
+                }
+            }
+            result
+        };
+
+        for cue in cues_to_play {
+            self.play_cue(&cue, event_loop);
+        }
+
+        // Check for AfterLast cues and schedule them
+        let after_last = {
+            let state = self.qplayer.state().lock().unwrap();
+            let mut after_last_qids = Vec::new();
+            for i in (start_idx + 1)..state.show_file.cues.len() {
+                let cue = &state.show_file.cues[i];
+                if cue.base().trigger == qplayer_core::TriggerMode::AfterLast {
+                    after_last_qids.push(cue.base().qid);
+                } else {
+                    break;
+                }
+            }
+            after_last_qids
+        };
+        for qid in after_last {
+            log::info!("AfterLast cue Q{} scheduled (TODO: auto-trigger when previous finishes)", qid);
+        }
+    }
+
+    fn play_cue(&mut self, cue: &qplayer_core::Cue, event_loop: &ActiveEventLoop) {
+        let qid = cue.base().qid;
+        let name = cue.base().name.clone();
         match cue {
             qplayer_core::Cue::Sound { path, .. } => {
                 log::info!("Go SoundCue: {}", path);
-                self.play_audio(&path);
+                self.play_audio(path, qid, &name);
             }
             qplayer_core::Cue::Video { path, .. } => {
                 log::info!("Go VideoCue: {}", path);
-                self.play_audio(&path);
-                self.play_video(&path, event_loop);
+                self.play_audio(path, qid, &name);
+                self.play_video(path, event_loop);
+            }
+            qplayer_core::Cue::Stop { stop_qid, fade_out_time, fade_type, .. } => {
+                log::info!("Go StopCue -> stop Q{}", stop_qid);
+                self.handle_stop_cue(*stop_qid, *fade_out_time, *fade_type);
+            }
+            qplayer_core::Cue::Volume { sound_qid, volume, fade_time, fade_type, .. } => {
+                log::info!("Go VolumeCue -> adjust Q{} to {:.1} dB", sound_qid, 20.0 * volume.log10());
+                self.handle_volume_cue(*sound_qid, *volume, *fade_time, fade_type);
             }
             other => {
-                log::info!("Go on unsupported cue type: {:?}", std::mem::discriminant(&other));
+                log::info!("Go on unsupported cue type: {:?}", std::mem::discriminant(other));
             }
         }
     }
 
-    fn play_audio(&self, path: &str) {
+    fn play_audio(&mut self, path: &str, qid: rust_decimal::Decimal, name: &str) {
         match FfmpegDecoder::open(path) {
             Ok(decoder) => {
-                self.audio_engine.play(Box::new(decoder));
+                let input = self.audio_engine.play(Box::new(decoder));
+                self.active_cues.push(ActiveCue { qid, name: name.to_string(), input });
             }
             Err(e) => {
                 log::error!("Failed to open audio for {}: {}", path, e);
             }
+        }
+    }
+
+    fn handle_stop_cue(&mut self, stop_qid: rust_decimal::Decimal, fade_out_time: f32, fade_type: qplayer_core::FadeType) {
+        let idx = self.active_cues.iter().position(|ac| ac.qid == stop_qid);
+        if let Some(idx) = idx {
+            let input = self.active_cues.remove(idx).input;
+            if fade_out_time > 0.0 {
+                let initial_volume = input.volume();
+                let steps = 20usize;
+                let sleep_ms = (fade_out_time * 1000.0) / steps as f32;
+                let _fade_type = fade_type;
+                std::thread::spawn(move || {
+                    for i in 0..=steps {
+                        let t = i as f32 / steps as f32;
+                        let vol = initial_volume * (1.0 - t);
+                        input.set_volume(vol.max(0.0));
+                        if i < steps {
+                            std::thread::sleep(Duration::from_millis(sleep_ms as u64));
+                        }
+                    }
+                    input.set_active(false);
+                });
+            } else {
+                input.set_active(false);
+            }
+        } else {
+            log::warn!("StopCue target Q{} not found in active cues", stop_qid);
+        }
+    }
+
+    /// Restart the audio engine with a specific device.
+    fn restart_audio_engine(&mut self, device: &cpal::Device) {
+        self.stop_all();
+        match AudioEngine::new(device) {
+            Ok(new_engine) => {
+                let name = new_engine.device_name().to_string();
+                self.audio_engine = new_engine;
+                if let Ok(mut state) = self.qplayer.state().lock() {
+                    state.audio_device_name = name;
+                }
+                log::info!("Switched audio output device");
+            }
+            Err(e) => {
+                log::error!("Failed to switch audio device: {}. Attempting fallback to default.", e);
+                if let Ok(fallback) = AudioEngine::new_default() {
+                    let name = fallback.device_name().to_string();
+                    self.audio_engine = fallback;
+                    if let Ok(mut state) = self.qplayer.state().lock() {
+                        state.audio_device_name = name;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check for cues that have finished playing naturally and trigger AfterLast chains.
+    fn check_finished_cues(&mut self, event_loop: &ActiveEventLoop) {
+        // Collect finished cue QIDs without borrowing self mutably in the loop
+        let finished_qids: Vec<rust_decimal::Decimal> = self.active_cues.iter()
+            .filter(|ac| ac.input.is_finished())
+            .map(|ac| ac.qid)
+            .collect();
+
+        for qid in finished_qids {
+            // Remove finished cue from active list
+            self.active_cues.retain(|ac| ac.qid != qid);
+            log::info!("Cue Q{} finished naturally — checking AfterLast chain", qid);
+
+            // Find the cue's position in the show file
+            let state = self.qplayer.state().lock().unwrap();
+            let Some(idx) = state.show_file.cues.iter().position(|c| c.base().qid == qid) else {
+                continue;
+            };
+
+            // Collect consecutive AfterLast cues after this one
+            let mut after_last_cues = Vec::new();
+            for i in (idx + 1)..state.show_file.cues.len() {
+                let cue = &state.show_file.cues[i];
+                if cue.base().trigger == qplayer_core::TriggerMode::AfterLast {
+                    after_last_cues.push(cue.clone());
+                } else {
+                    break;
+                }
+            }
+            drop(state);
+
+            // Play AfterLast chain: non-audio cues fire immediately in a burst,
+            // then the first audio cue starts and will trigger its own chain when it finishes.
+            for cue in after_last_cues {
+                let is_audio = matches!(cue, qplayer_core::Cue::Sound { .. } | qplayer_core::Cue::Video { .. });
+                self.play_cue(&cue, event_loop);
+                if is_audio {
+                    break; // wait for this audio cue to finish before continuing the chain
+                }
+            }
+        }
+    }
+
+    fn handle_volume_cue(&mut self, sound_qid: rust_decimal::Decimal, target_volume: f32, fade_time: f32, fade_type: &qplayer_core::FadeType) {
+        let target = self.active_cues.iter().find(|ac| ac.qid == sound_qid).cloned();
+        if let Some(input) = target.map(|ac| ac.input) {
+            if fade_time > 0.0 {
+                let initial_volume = input.volume();
+                let steps = 20usize;
+                let sleep_ms = (fade_time * 1000.0) / steps as f32;
+                let _fade_type = *fade_type;
+                std::thread::spawn(move || {
+                    for i in 0..=steps {
+                        let t = i as f32 / steps as f32;
+                        // Simple linear interpolation for now; fade_type ignored in thread-based fade
+                        let vol = initial_volume + (target_volume - initial_volume) * t;
+                        input.set_volume(vol.max(0.0));
+                        if i < steps {
+                            std::thread::sleep(Duration::from_millis(sleep_ms as u64));
+                        }
+                    }
+                });
+            } else {
+                input.set_volume(target_volume.max(0.0));
+            }
+        } else {
+            log::warn!("VolumeCue target Q{} not found in active cues", sound_qid);
         }
     }
 
@@ -377,6 +578,24 @@ impl App {
         self.video_frame_dirty = false;
         self.video_start_clock = None;
         self.audio_engine.stop_all();
+        self.active_cues.clear();
+        self.paused = false;
+    }
+
+    fn pause_all(&mut self) {
+        for ac in &self.active_cues {
+            ac.input.set_active(false);
+        }
+        self.paused = true;
+        log::info!("Paused {} cue(s)", self.active_cues.len());
+    }
+
+    fn resume_all(&mut self) {
+        for ac in &self.active_cues {
+            ac.input.set_active(true);
+        }
+        self.paused = false;
+        log::info!("Resumed {} cue(s)", self.active_cues.len());
     }
 
     fn handle_dropped_file(&mut self, path: &Path) {
@@ -384,6 +603,17 @@ impl App {
             .extension()
             .and_then(|e| e.to_str())
             .map(|s| s.to_lowercase());
+
+        // Open project files directly
+        if ext.as_deref() == Some("qproj") {
+            if let Ok(mut state) = self.qplayer.state().lock() {
+                state.command_queue.push(qplayer_gui::AppCommand::OpenProject {
+                    path: path.to_path_buf(),
+                });
+            }
+            return;
+        }
+
         let is_video = matches!(ext.as_deref(), Some("mp4") | Some("mov") | Some("mkv") | Some("avi"));
         let is_audio = matches!(
             ext.as_deref(),
@@ -405,14 +635,7 @@ impl App {
             let snapshot = qplayer_gui::app::Snapshot::from_state(&state);
             state.undo_redo.push(snapshot);
 
-            let next_qid = state
-                .show_file
-                .cues
-                .iter()
-                .map(|c| c.base().qid)
-                .max()
-                .unwrap_or(rust_decimal::Decimal::ZERO)
-                + rust_decimal::Decimal::ONE;
+            let next_qid = state.show_file.choose_qid(state.selected_cue_id);
 
             let base = qplayer_core::CueBase {
                 qid: next_qid,
@@ -467,6 +690,25 @@ impl App {
             match cmd {
                 AppCommand::Go => self.handle_go(event_loop),
                 AppCommand::Stop => self.stop_all(),
+                AppCommand::Pause => {
+                    if self.paused {
+                        self.resume_all();
+                    } else {
+                        self.pause_all();
+                    }
+                }
+                AppCommand::SetLimiterThreshold(threshold) => {
+                    self.audio_engine.set_limiter_threshold(threshold);
+                    log::info!("Set master limiter threshold to {:.2} dB", 20.0 * threshold.log10());
+                }
+                AppCommand::SetAudioDevice(name) => {
+                    let devices = AudioEngine::list_devices();
+                    if let Some((_, device)) = devices.into_iter().find(|(n, _)| n == &name) {
+                        self.restart_audio_engine(&device);
+                    } else {
+                        log::warn!("Audio device '{}' not found", name);
+                    }
+                }
                 AppCommand::SaveProject | AppCommand::SaveProjectAs { .. } => {
                     if let Some(pm) = self.plugin_manager.as_mut() {
                         pm.on_save();
@@ -498,8 +740,18 @@ impl App {
                             state.command_queue.push(AppCommand::Stop);
                         }
                     }
-                    OscEvent::Pause { .. } => {}
-                    OscEvent::Unpause { .. } => {}
+                    OscEvent::Pause { .. } => {
+                        if let Ok(mut state) = self.qplayer.state().lock() {
+                            state.command_queue.push(AppCommand::Pause);
+                        }
+                    }
+                    OscEvent::Unpause { .. } => {
+                        if self.paused {
+                            if let Ok(mut state) = self.qplayer.state().lock() {
+                                state.command_queue.push(AppCommand::Pause);
+                            }
+                        }
+                    }
                     OscEvent::Select { qid } => {
                         if let Ok(qid_dec) = qid.parse::<rust_decimal::Decimal>() {
                             let _ = self.qplayer.state().lock().map(|mut s| s.selected_cue_id = Some(qid_dec));
@@ -585,6 +837,7 @@ impl App {
     }
 
     fn render_control(&mut self, event_loop: &ActiveEventLoop) {
+        self.check_finished_cues(event_loop);
         self.update_window_title();
         let Some(surface) = self.control_surface.as_ref() else { return };
         let Some(config) = self.control_config.as_ref() else { return };
@@ -602,6 +855,39 @@ impl App {
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let raw_input = egui_state.take_egui_input(window);
+        // Sync active cue state into the GUI shared state
+        {
+            let gui_active: Vec<qplayer_gui::ActiveCueInfo> = self.active_cues.iter().map(|ac| {
+                qplayer_gui::ActiveCueInfo {
+                    qid: ac.qid,
+                    name: ac.name.clone(),
+                    volume: ac.input.volume(),
+                    paused: !ac.input.is_active(),
+                }
+            }).collect();
+            if let Ok(mut state) = self.qplayer.state().lock() {
+                state.active_cues = gui_active;
+            }
+        }
+
+        // Sync master meter data into the GUI shared state
+        {
+            let meters = self.audio_engine.read_meters();
+            let peak_l_db = if meters.peak_l > 0.0 { 20.0 * meters.peak_l.log10() } else { -f32::INFINITY };
+            let peak_r_db = if meters.peak_r > 0.0 { 20.0 * meters.peak_r.log10() } else { -f32::INFINITY };
+            let rms_l_db = if meters.rms_l > 0.0 { 20.0 * meters.rms_l.log10() } else { -f32::INFINITY };
+            let rms_r_db = if meters.rms_r > 0.0 { 20.0 * meters.rms_r.log10() } else { -f32::INFINITY };
+            if let Ok(mut state) = self.qplayer.state().lock() {
+                state.meter_data = qplayer_gui::GuiMeterData {
+                    peak_l_db,
+                    peak_r_db,
+                    rms_l_db,
+                    rms_r_db,
+                    clipped: false, // TODO: expose clip flag from MeteringProcessor
+                };
+            }
+        }
+
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
             self.qplayer.update(ctx);
         });
@@ -725,6 +1011,29 @@ impl ApplicationHandler<AppEvent> for App {
 
             match event {
                 WindowEvent::CloseRequested => {
+                    let has_running = !self.active_cues.is_empty();
+                    if has_running {
+                        let choice = rfd::MessageDialog::new()
+                            .set_title("Running Cues")
+                            .set_description("There are cues currently playing. Stop them and exit?")
+                            .set_buttons(rfd::MessageButtons::OkCancel)
+                            .show();
+                        if !matches!(choice, rfd::MessageDialogResult::Ok) {
+                            return;
+                        }
+                        self.stop_all();
+                    }
+                    let dirty = self.qplayer.state().lock().map(|s| s.dirty).unwrap_or(false);
+                    if dirty {
+                        let choice = rfd::MessageDialog::new()
+                            .set_title("Unsaved Changes")
+                            .set_description("You have unsaved changes. Discard them?")
+                            .set_buttons(rfd::MessageButtons::OkCancel)
+                            .show();
+                        if !matches!(choice, rfd::MessageDialogResult::Ok) {
+                            return;
+                        }
+                    }
                     event_loop.exit();
                 }
                 WindowEvent::Resized(size) => {
@@ -897,6 +1206,37 @@ fn spawn_autosave_thread(state: SharedStateHandle, running: Arc<AtomicBool>) {
     });
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct AppSettings {
+    recent_files: Vec<std::path::PathBuf>,
+}
+
+fn settings_path() -> Option<std::path::PathBuf> {
+    dirs::config_dir().map(|p| p.join("QPlayer").join("settings.json"))
+}
+
+fn load_settings() -> AppSettings {
+    if let Some(path) = settings_path() {
+        if let Ok(data) = std::fs::read_to_string(&path) {
+            if let Ok(settings) = serde_json::from_str(&data) {
+                return settings;
+            }
+        }
+    }
+    AppSettings::default()
+}
+
+fn save_settings(settings: &AppSettings) {
+    if let Some(path) = settings_path() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(data) = serde_json::to_string_pretty(settings) {
+            let _ = std::fs::write(path, data);
+        }
+    }
+}
+
 /// Attempt an emergency save before the process exits.
 fn emergency_save(state: &SharedStateHandle) {
     let (json, path) = {
@@ -977,6 +1317,14 @@ fn main() -> anyhow::Result<()> {
 
     let mut app = App::new(instance, adapter, device, queue, proxy);
 
+    // Load persisted settings and sync audio device name
+    let settings = load_settings();
+    let device_name = app.audio_engine.device_name().to_string();
+    if let Ok(mut state) = app.qplayer.state().lock() {
+        state.recent_files = settings.recent_files;
+        state.audio_device_name = device_name;
+    }
+
     // Ctrl-C / SIGTERM handler for graceful emergency save
     {
         let state = Arc::clone(app.qplayer.state());
@@ -988,6 +1336,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     event_loop.run_app(&mut app)?;
+
+    // Save persisted settings
+    let recent_files = app.qplayer.state().lock().map(|s| s.recent_files.clone()).unwrap_or_default();
+    save_settings(&AppSettings { recent_files });
 
     // Notify plugins before shutdown
     if let Some(pm) = app.plugin_manager.as_mut() {

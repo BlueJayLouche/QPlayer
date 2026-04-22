@@ -37,6 +37,44 @@ fn default_file_format_version() -> i32 {
     FILE_FORMAT_VERSION
 }
 
+impl ShowFile {
+    /// Choose the next QID for a new cue.
+    ///
+    /// If `after_qid` is provided, attempts decimal subdivision
+    /// (e.g. 1 → 1.1 → 1.01). If all subdivisions are taken or no
+    /// `after_qid` is given, falls back to `max(qid) + 1`.
+    pub fn choose_qid(&self, after_qid: Option<rust_decimal::Decimal>) -> rust_decimal::Decimal {
+        use rust_decimal::Decimal;
+
+        // Collect existing QIDs for fast lookup
+        let existing: std::collections::HashSet<Decimal> =
+            self.cues.iter().map(|c| c.base().qid).collect();
+
+        // Try decimal subdivision after the selected cue
+        if let Some(base) = after_qid {
+            for scale in [Decimal::from_str_exact("0.1").unwrap(),
+                          Decimal::from_str_exact("0.01").unwrap(),
+                          Decimal::from_str_exact("0.001").unwrap(),
+                          Decimal::from_str_exact("0.0001").unwrap(),
+                          Decimal::from_str_exact("0.00001").unwrap(),
+                          Decimal::from_str_exact("0.000001").unwrap()] {
+                let candidate = base + scale;
+                if !existing.contains(&candidate) {
+                    return candidate;
+                }
+            }
+        }
+
+        // Fallback: max + 1
+        self.cues
+            .iter()
+            .map(|c| c.base().qid)
+            .max()
+            .unwrap_or(Decimal::ZERO)
+            + Decimal::ONE
+    }
+}
+
 /// Project-level settings (audio, networking, metadata).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShowSettings {

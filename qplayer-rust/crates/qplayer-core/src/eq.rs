@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EQSettings {
     #[serde(default)]
     pub enabled: bool,
@@ -20,6 +20,26 @@ pub struct EQSettings {
     pub hpf: EQFilter,
     #[serde(default)]
     pub lpf: EQFilter,
+}
+
+impl Default for EQSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            band1: EQBand::default(),
+            band2: EQBand::default(),
+            band3: EQBand::default(),
+            band4: EQBand::default(),
+            hpf: EQFilter {
+                frequency: 20.0,
+                order: EQFilterOrder::default(),
+            },
+            lpf: EQFilter {
+                frequency: 20000.0,
+                order: EQFilterOrder::default(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]

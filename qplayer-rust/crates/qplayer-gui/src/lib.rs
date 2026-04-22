@@ -2,10 +2,11 @@
 //!
 //! Replaces all WPF Views and ViewModels.
 
+pub mod active_cues;
 pub mod app;
 pub mod cue_list;
 pub mod inspector;
 pub mod transport;
 pub mod waveform;
 
-pub use app::{AppCommand, QPlayerApp, SharedState, SharedStateHandle, ShowMode};
+pub use app::{ActiveCueInfo, AppCommand, GuiMeterData, QPlayerApp, SharedState, SharedStateHandle, ShowMode};

@@ -7,7 +7,52 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
     ui.heading("Inspector");
     ui.separator();
 
+    // Spawn waveform generation for the selected cue if needed
+    let waveform_path = {
+        let Ok(state) = state.lock() else { return };
+        if let Some(cue) = state.selected_cue() {
+            let path = match cue {
+                qplayer_core::Cue::Sound { path, .. } | qplayer_core::Cue::Video { path, .. } => path.clone(),
+                _ => String::new(),
+            };
+            if !path.is_empty() && !state.waveform_cache.contains_key(&path) && !state.pending_waveforms.contains(&path) {
+                Some(path)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    if let Some(path) = waveform_path {
+        let state_clone = std::sync::Arc::clone(state);
+        std::thread::spawn(move || {
+            if let Some(peaks) = crate::waveform::generate_peaks(&path, 200) {
+                if let Ok(mut state) = state_clone.lock() {
+                    state.waveform_cache.insert(path.clone(), peaks);
+                    state.pending_waveforms.remove(&path);
+                }
+            } else if let Ok(mut state) = state_clone.lock() {
+                state.pending_waveforms.remove(&path);
+            }
+        });
+    }
+
     let Ok(mut state) = state.lock() else { return };
+
+    // Pre-fetch waveform data before taking mutable cue reference
+    let waveform_data = if let Some(cue) = state.selected_cue() {
+        let path = match cue {
+            qplayer_core::Cue::Sound { path, .. } | qplayer_core::Cue::Video { path, .. } => path.clone(),
+            _ => String::new(),
+        };
+        let peaks = state.waveform_cache.get(&path).cloned();
+        let pending = state.pending_waveforms.contains(&path);
+        Some((peaks, pending))
+    } else {
+        None
+    };
+
     let Some(cue) = state.selected_cue_mut() else {
         ui.label("Select a cue to edit its properties.");
         return;
@@ -46,17 +91,59 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
             changed = true;
         }
     });
+    ui.horizontal(|ui| {
+        ui.label("Colour:");
+        let mut col = egui::Color32::from_rgba_premultiplied(
+            (base.colour.r * 255.0) as u8,
+            (base.colour.g * 255.0) as u8,
+            (base.colour.b * 255.0) as u8,
+            (base.colour.a * 255.0) as u8,
+        );
+        if ui.color_edit_button_srgba(&mut col).changed() {
+            base.colour.r = col.r() as f32 / 255.0;
+            base.colour.g = col.g() as f32 / 255.0;
+            base.colour.b = col.b() as f32 / 255.0;
+            base.colour.a = col.a() as f32 / 255.0;
+            changed = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Trigger:");
+        egui::ComboBox::from_id_salt("trigger_mode")
+            .selected_text(format!("{:?}", base.trigger))
+            .show_ui(ui, |ui| {
+                for variant in [qplayer_core::TriggerMode::Go, qplayer_core::TriggerMode::WithLast, qplayer_core::TriggerMode::AfterLast] {
+                    if ui.selectable_value(&mut base.trigger, variant, format!("{:?}", variant)).clicked() {
+                        changed = true;
+                    }
+                }
+            });
+    });
 
     ui.separator();
 
     match cue {
-        qplayer_core::Cue::Sound { path, volume, pan, fade_in, fade_out, fade_type, .. } => {
+        qplayer_core::Cue::Sound { path, volume, pan, fade_in, fade_out, fade_type, eq, .. } => {
             ui.label(RichText::new("Sound Cue").monospace().size(12.0));
             ui.horizontal(|ui| {
                 ui.label("File:");
                 let response = ui.text_edit_singleline(path);
                 changed |= response.changed();
+                if ui.button("Browse…").clicked() {
+                    if let Some(new_path) = rfd::FileDialog::new()
+                        .add_filter("Audio", &["wav", "mp3", "flac", "ogg", "aiff", "wma"])
+                        .pick_file()
+                    {
+                        *path = new_path.to_string_lossy().to_string();
+                        changed = true;
+                    }
+                }
             });
+            if let Some((Some(ref peaks), _)) = waveform_data {
+                crate::waveform::draw(ui, peaks);
+            } else if let Some((None, true)) = waveform_data {
+                ui.label(egui::RichText::new("Generating waveform…").italics().color(egui::Color32::GRAY));
+            }
             ui.horizontal(|ui| {
                 ui.label("Volume (dB):");
                 let mut db = 20.0 * volume.log10();
@@ -93,14 +180,29 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                         }
                     });
             });
+            eq_editor(ui, eq, &mut changed);
         }
-        qplayer_core::Cue::Video { path, volume, pan, fade_in, fade_out, fade_type, .. } => {
+        qplayer_core::Cue::Video { path, volume, pan, fade_in, fade_out, fade_type, eq, .. } => {
             ui.label(RichText::new("Video Cue").monospace().size(12.0));
             ui.horizontal(|ui| {
                 ui.label("File:");
                 let response = ui.text_edit_singleline(path);
                 changed |= response.changed();
+                if ui.button("Browse…").clicked() {
+                    if let Some(new_path) = rfd::FileDialog::new()
+                        .add_filter("Video", &["mp4", "mov", "mkv", "avi"])
+                        .pick_file()
+                    {
+                        *path = new_path.to_string_lossy().to_string();
+                        changed = true;
+                    }
+                }
             });
+            if let Some((Some(ref peaks), _)) = waveform_data {
+                crate::waveform::draw(ui, peaks);
+            } else if let Some((None, true)) = waveform_data {
+                ui.label(egui::RichText::new("Generating waveform…").italics().color(egui::Color32::GRAY));
+            }
             ui.horizontal(|ui| {
                 ui.label("Volume (dB):");
                 let mut db = 20.0 * volume.log10();
@@ -127,7 +229,7 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
             });
             ui.horizontal(|ui| {
                 ui.label("Fade Type:");
-                egui::ComboBox::from_id_salt("fade_type")
+                egui::ComboBox::from_id_salt("fade_type_vid")
                     .selected_text(format!("{:?}", fade_type))
                     .show_ui(ui, |ui| {
                         for variant in [qplayer_core::FadeType::Linear, qplayer_core::FadeType::SCurve, qplayer_core::FadeType::Square, qplayer_core::FadeType::InverseSquare] {
@@ -137,6 +239,7 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                         }
                     });
             });
+            eq_editor(ui, eq, &mut changed);
         }
         qplayer_core::Cue::Group { .. } => {
             ui.label(RichText::new("Group Cue").monospace().size(12.0));
@@ -212,3 +315,109 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
         state.dirty = true;
     }
 }
+
+fn eq_editor(ui: &mut egui::Ui, eq: &mut Option<qplayer_core::EQSettings>, changed: &mut bool) {
+    ui.separator();
+    ui.label(egui::RichText::new("EQ").strong().size(12.0));
+
+    let mut enabled = eq.is_some();
+    if ui.checkbox(&mut enabled, "Enabled").changed() {
+        *changed = true;
+        if enabled {
+            *eq = Some(qplayer_core::EQSettings::default());
+        } else {
+            *eq = None;
+        }
+    }
+
+    let Some(eq) = eq else { return };
+
+    ui.horizontal(|ui| {
+        ui.label("HPF:");
+        let mut hpf_freq = eq.hpf.frequency;
+        let response = ui.add(egui::DragValue::new(&mut hpf_freq).speed(1.0).range(20.0..=20000.0).suffix(" Hz"));
+        if response.changed() {
+            eq.hpf.frequency = hpf_freq;
+            *changed = true;
+        }
+        egui::ComboBox::from_id_salt("hpf_order")
+            .width(80.0)
+            .selected_text(format!("{:?}", eq.hpf.order))
+            .show_ui(ui, |ui| {
+                for variant in [qplayer_core::EQFilterOrder::Disabled, qplayer_core::EQFilterOrder::_12dBOct, qplayer_core::EQFilterOrder::_24dBOct] {
+                    if ui.selectable_value(&mut eq.hpf.order, variant, format!("{:?}", variant)).clicked() {
+                        *changed = true;
+                    }
+                }
+            });
+    });
+
+    ui.horizontal(|ui| {
+        ui.label("LPF:");
+        let mut lpf_freq = eq.lpf.frequency;
+        let response = ui.add(egui::DragValue::new(&mut lpf_freq).speed(1.0).range(20.0..=20000.0).suffix(" Hz"));
+        if response.changed() {
+            eq.lpf.frequency = lpf_freq;
+            *changed = true;
+        }
+        egui::ComboBox::from_id_salt("lpf_order")
+            .width(80.0)
+            .selected_text(format!("{:?}", eq.lpf.order))
+            .show_ui(ui, |ui| {
+                for variant in [qplayer_core::EQFilterOrder::Disabled, qplayer_core::EQFilterOrder::_12dBOct, qplayer_core::EQFilterOrder::_24dBOct] {
+                    if ui.selectable_value(&mut eq.lpf.order, variant, format!("{:?}", variant)).clicked() {
+                        *changed = true;
+                    }
+                }
+            });
+    });
+
+    let bands = [
+        (&mut eq.band1, "Band 1"),
+        (&mut eq.band2, "Band 2"),
+        (&mut eq.band3, "Band 3"),
+        (&mut eq.band4, "Band 4"),
+    ];
+    for (band, label) in bands {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            egui::ComboBox::from_id_salt(format!("eq_shape_{}", label))
+                .width(80.0)
+                .selected_text(format!("{:?}", band.shape))
+                .show_ui(ui, |ui| {
+                    for variant in [
+                        qplayer_core::EQBandShape::Bell,
+                        qplayer_core::EQBandShape::HighShelf,
+                        qplayer_core::EQBandShape::LowShelf,
+                        qplayer_core::EQBandShape::Notch,
+                        qplayer_core::EQBandShape::LowPass,
+                        qplayer_core::EQBandShape::HighPass,
+                        qplayer_core::EQBandShape::AllPass,
+                    ] {
+                        if ui.selectable_value(&mut band.shape, variant, format!("{:?}", variant)).clicked() {
+                            *changed = true;
+                        }
+                    }
+                });
+            let mut freq = band.freq;
+            let response = ui.add(egui::DragValue::new(&mut freq).speed(1.0).range(20.0..=20000.0).suffix(" Hz"));
+            if response.changed() {
+                band.freq = freq;
+                *changed = true;
+            }
+            let mut gain = band.gain;
+            let response = ui.add(egui::Slider::new(&mut gain, -18.0..=18.0).text("dB"));
+            if response.changed() {
+                band.gain = gain;
+                *changed = true;
+            }
+            let mut q = band.q;
+            let response = ui.add(egui::DragValue::new(&mut q).speed(0.01).range(0.1..=10.0));
+            if response.changed() {
+                band.q = q;
+                *changed = true;
+            }
+        });
+    }
+}
+

@@ -56,7 +56,7 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
     ui.separator();
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        for cue in &cues {
+        for (idx, cue) in cues.iter().enumerate() {
             let base = cue.base();
             let qid = base.qid;
             let is_selected = selected_id == Some(qid);
@@ -70,12 +70,17 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                 ui.visuals().panel_fill
             };
 
-            egui::Frame::new()
+            let frame_response = egui::Frame::new()
                 .fill(bg)
                 .inner_margin(egui::Margin::same(4))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.set_min_height(20.0);
+
+                        // Drag handle (only in edit mode)
+                        if show_mode == crate::app::ShowMode::Edit {
+                            ui.label(egui::RichText::new("≡").monospace().size(14.0));
+                        }
 
                         // Q# column
                         let qid_str = qid.to_string();
@@ -102,31 +107,59 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                             egui::Sense::hover(),
                         );
                         ui.painter().rect_filled(rect, 4.0, colour);
-
-                        // Context menu (right-click)
-                        if show_mode == crate::app::ShowMode::Edit {
-                            response.context_menu(|ui| {
-                                if ui.button("Duplicate").clicked() {
-                                    queue_cmd(state, AppCommand::DuplicateSelectedCue);
-                                    ui.close();
-                                }
-                                if ui.button("Delete").clicked() {
-                                    queue_cmd(state, AppCommand::DeleteSelectedCue);
-                                    ui.close();
-                                }
-                                ui.separator();
-                                if ui.button("Add Sound Cue").clicked() {
-                                    queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Sound });
-                                    ui.close();
-                                }
-                                if ui.button("Add Video Cue").clicked() {
-                                    queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Video });
-                                    ui.close();
-                                }
-                            });
-                        }
                     });
                 });
+
+            // Context menu on the entire row (right-click anywhere in the frame)
+            if show_mode == crate::app::ShowMode::Edit {
+                frame_response.response.context_menu(|ui| {
+                    if ui.button("Move Up").clicked() {
+                        queue_cmd(state, AppCommand::MoveSelectedCueUp);
+                        ui.close();
+                    }
+                    if ui.button("Move Down").clicked() {
+                        queue_cmd(state, AppCommand::MoveSelectedCueDown);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Duplicate").clicked() {
+                        queue_cmd(state, AppCommand::DuplicateSelectedCue);
+                        ui.close();
+                    }
+                    if ui.button("Delete").clicked() {
+                        queue_cmd(state, AppCommand::DeleteSelectedCue);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Add Sound Cue").clicked() {
+                        queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Sound });
+                        ui.close();
+                    }
+                    if ui.button("Add Video Cue").clicked() {
+                        queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Video });
+                        ui.close();
+                    }
+                    if ui.button("Add Stop Cue").clicked() {
+                        queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Stop });
+                        ui.close();
+                    }
+                    if ui.button("Add Volume Cue").clicked() {
+                        queue_cmd(state, AppCommand::AddCue { cue_type: CueType::Volume });
+                        ui.close();
+                    }
+                });
+            }
+
+            // Drag-and-drop reordering (edit mode only)
+            if show_mode == crate::app::ShowMode::Edit {
+                frame_response.response.dnd_set_drag_payload(idx);
+                if let Some(source_idx) = frame_response.response.dnd_release_payload::<usize>() {
+                    let source = *source_idx;
+                    if source != idx {
+                        queue_cmd(state, AppCommand::MoveCue { from_idx: source, to_idx: idx });
+                    }
+                }
+            }
         }
     });
 

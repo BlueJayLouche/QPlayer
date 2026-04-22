@@ -1,6 +1,6 @@
 //! Transport controls — Go, Stop, Pause buttons.
 
-use crate::app::{AppCommand, SharedStateHandle};
+use crate::app::{AppCommand, GuiMeterData, SharedStateHandle};
 use egui::{Button, Color32, RichText, Vec2};
 
 pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
@@ -64,5 +64,58 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
                 state.dirty = true;
             }
         }
+
+        // Master meter bridge
+        let meter_data = {
+            let Ok(state) = state.lock() else { return };
+            state.meter_data
+        };
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            draw_meter(ui, &meter_data);
+        });
     });
+}
+
+fn draw_meter(ui: &mut egui::Ui, data: &GuiMeterData) {
+    let width = 8.0;
+    let height = 32.0;
+    let gap = 4.0;
+
+    for &(peak_db, rms_db) in &[(data.peak_l_db, data.rms_l_db), (data.peak_r_db, data.rms_r_db)] {
+        let (rect, _response) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
+        let painter = ui.painter();
+
+        // Background
+        painter.rect_filled(rect, 1.0, Color32::from_rgb(30, 30, 30));
+
+        // Draw segments from bottom up
+        let segments = 12i32;
+        let seg_h = height / segments as f32;
+        for i in 0..segments {
+            let seg_db = -60.0 + (i as f32 / segments as f32) * 60.0; // -60dB to 0dB
+            let seg_y = rect.max.y - (i as f32 + 0.5) * seg_h;
+            let seg_rect = egui::Rect::from_center_size(
+                egui::pos2(rect.center().x, seg_y),
+                egui::vec2(width - 2.0, seg_h - 1.0),
+            );
+
+            let lit = rms_db >= seg_db || peak_db >= seg_db;
+            let peak_lit = peak_db >= seg_db;
+            let colour = if seg_db >= 0.0 {
+                Color32::RED
+            } else if seg_db >= -12.0 {
+                Color32::YELLOW
+            } else {
+                Color32::GREEN
+            };
+
+            if peak_lit {
+                painter.rect_filled(seg_rect, 1.0, colour);
+            } else if lit {
+                painter.rect_filled(seg_rect, 1.0, colour.gamma_multiply(0.5));
+            }
+        }
+    }
+
+    ui.add_space(gap);
 }

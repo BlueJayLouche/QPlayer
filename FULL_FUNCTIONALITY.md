@@ -2,7 +2,7 @@
 
 This document tracks the remaining work to reach feature parity with the C# QPlayer application. The architectural phases (core, audio, video, protocols, plugins) are complete. This roadmap focuses on **GUI interactivity, cue manipulation, and production usability**.
 
-> Last updated: 2026-04-22 (editable inspector, add/delete/duplicate cues, keyboard shortcuts, command-queue fix, audio stop wired)
+> Last updated: 2026-04-22 (Context menus on whole row, AfterLast auto-trigger, audio device hot-swap, .qpek peak file caching, full project settings window with Audio/OSC/MSC sections)
 > Status: Foundation complete → GUI interactivity in progress
 
 ---
@@ -15,9 +15,9 @@ This document tracks the remaining work to reach feature parity with the C# QPla
 | A.2 | **Add cue** | Right-click menu, `Ctrl+T`, toolbar button | ✅ Toolbar + context menu; Sound/Video/Stop/Volume/Group/Dummy/TimeCode | `qplayer-gui/src/cue_list/mod.rs`, `app/mod.rs` |
 | A.3 | **Delete cue** | `Delete` key, context menu | ✅ Delete key + context menu | `qplayer-gui/src/cue_list/mod.rs`, `app/mod.rs` |
 | A.4 | **Duplicate cue** | `Ctrl+D` | ✅ Ctrl+D + context menu | `qplayer-gui/src/app/mod.rs` |
-| A.5 | **Move cue up/down** | `Ctrl+↑/↓`, drag-and-drop | ❌ Not implemented | `qplayer-gui/src/cue_list/mod.rs` |
-| A.6 | **QID auto-assignment** | `ChooseQID()` with decimal subdivision (1 → 1.1 → 1.01) | ⚠️ Sequential integers only on drag-drop | `qplayer-core/src/cue/mod.rs` |
-| A.7 | **Colour picker** | Full picker in inspector | ⚠️ Display-only swatch | `qplayer-gui/src/inspector/mod.rs` |
+| A.5 | **Move cue up/down** | `Ctrl+↑/↓`, drag-and-drop | ✅ `Ctrl+↑/↓` swaps cue position in list; context menu items too | `qplayer-gui/src/cue_list/mod.rs`, `app/mod.rs` |
+| A.6 | **QID auto-assignment** | `ChooseQID()` with decimal subdivision (1 → 1.1 → 1.01) | ✅ `ShowFile::choose_qid()` with 6-level decimal subdivision fallback to max+1 | `qplayer-core/src/showfile/mod.rs` |
+| A.7 | **Colour picker** | Full picker in inspector | ✅ `ui.color_edit_button_srgba` wired to `SerializedColour` in inspector | `qplayer-gui/src/inspector/mod.rs` |
 
 ### Exit Criterion
 User can create, edit, delete, duplicate, and reorder cues entirely through the GUI without editing `.qproj` files by hand.
@@ -32,13 +32,13 @@ User can create, edit, delete, duplicate, and reorder cues entirely through the 
 | # | Feature | C# Reference | Rust Status | Target File(s) |
 |---|---------|--------------|-------------|----------------|
 | B.1 | **Stop audio** | `AudioEngine.stop_all()` | ✅ `Mixer::stop_all()` clears all inputs; wired to `App::stop_all()` | `qplayer/src/main.rs:374` |
-| B.2 | **Pause / Resume** | Pauses active cues, resumes from pause point | ⚠️ Commands reach main.rs now; Pause implementation still needed in audio engine | `qplayer/src/main.rs`, `qplayer-audio/src/engine.rs` |
+| B.2 | **Pause / Resume** | Pauses active cues, resumes from pause point | ✅ Toggles `MixerInput::active` on all active cues; toggle button in transport | `qplayer/src/main.rs` |
 | B.3 | **Preload** | Decode to specific time, pause, ready to go | ❌ Not implemented | `qplayer/src/main.rs` |
-| B.4 | **Cue state machine** | Ready → Delay → Playing → Paused → Done | ❌ No runtime state tracking | `qplayer-gui/src/app/mod.rs` |
-| B.5 | **Trigger modes** | Go / Follow Last / After Last with delay | ❌ Go plays only selected cue | `qplayer/src/main.rs` |
-| B.6 | **Stop cue behavior** | Find target by QID, apply fade-out | ❌ Data model only. Also: `build_cue_chain` in `engine.rs:194` has TODO to wire EqProcessor, FadeProcessor, PanProcessor | `qplayer-audio/src/engine.rs` |
-| B.7 | **Volume cue behavior** | Find target sound cue, apply volume fade | ❌ Data model only | `qplayer-audio/src/engine.rs` |
-| B.8 | **Active cues panel** | Left panel showing running cues with live status | ❌ Not implemented | `qplayer-gui/src/app/mod.rs` |
+| B.4 | **Cue state machine** | Ready → Delay → Playing → Paused → Done | ⚠️ Basic tracking via `ActiveCue` struct with `qid/name/input` and `paused` flag | `qplayer/src/main.rs` |
+| B.5 | **Trigger modes** | Go / Follow Last / After Last with delay | ✅ `WithLast` fires consecutive cues together; `AfterLast` auto-triggers chain when previous cue finishes naturally (non-audio AfterLasts fire in a burst, first audio AfterLast waits for its own finish) | `qplayer-gui/src/inspector/mod.rs`, `qplayer/src/main.rs` |
+| B.6 | **Stop cue behavior** | Find target by QID, apply fade-out | ✅ Finds target in `active_cues`, thread-based fade-out over `fade_out_time`, then deactivates | `qplayer/src/main.rs` |
+| B.7 | **Volume cue behavior** | Find target sound cue, apply volume fade | ✅ Finds target in `active_cues`, thread-based volume fade over `fade_time` to target dB | `qplayer/src/main.rs` |
+| B.8 | **Active cues panel** | Left panel showing running cues with live status | ✅ Left `SidePanel` with QID, name, pause indicator, and tiny volume meter (green/yellow/red) | `qplayer-gui/src/active_cues/mod.rs` |
 
 ### Exit Criterion
 Pressing Go, Stop, Pause behaves identically to C# for SoundCue, VideoCue, StopCue, and VolumeCue.
@@ -49,10 +49,10 @@ Pressing Go, Stop, Pause behaves identically to C# for SoundCue, VideoCue, StopC
 
 | # | Feature | C# Reference | Rust Status | Target File(s) |
 |---|---------|--------------|-------------|----------------|
-| C.1 | **Keyboard shortcuts** | Space=Go, Esc=Stop, Del=Delete, Ctrl+N/O/S/T/D | ✅ Space=Go, Esc=Stop, Del=Delete, Ctrl+T=Add Sound, Ctrl+D=Duplicate, Ctrl+Z/Shift+Z=Undo/Redo | `qplayer-gui/src/app/mod.rs` |
-| C.2 | **Context menus** | Right-click on cue list (add/move/delete/duplicate) | ❌ Not implemented | `qplayer-gui/src/cue_list/mod.rs` |
-| C.3 | **Drag-and-drop reordering** | Visual ghost, auto-scroll, Ctrl+drag to copy | ❌ Not implemented | `qplayer-gui/src/cue_list/mod.rs` |
-| C.4 | **Drag-and-drop .qproj** | Open show file by dropping onto window | ❌ Audio/video only | `qplayer/src/main.rs` |
+| C.1 | **Keyboard shortcuts** | Space=Go, Esc=Stop, Del=Delete, Ctrl+N/O/S/T/D | ✅ Space=Go, Esc=Stop, Del=Delete, Ctrl+N=New, Ctrl+O=Open, Ctrl+S=Save, Ctrl+T=Add Sound, Ctrl+D=Duplicate, Ctrl+Z/Shift+Z=Undo/Redo, Ctrl+↑/↓=Move | `qplayer-gui/src/app/mod.rs` |
+| C.2 | **Context menus** | Right-click on cue list (add/move/delete/duplicate) | ✅ Right-click anywhere on cue row shows menu: Move Up/Down, Duplicate, Delete, Add Sound/Video/Stop/Volume Cue | `qplayer-gui/src/cue_list/mod.rs` |
+| C.3 | **Drag-and-drop reordering** | Visual ghost, auto-scroll, Ctrl+drag to copy | ✅ Drag handle (≡) on each row, drop onto target cue to reorder | `qplayer-gui/src/cue_list/mod.rs` |
+| C.4 | **Drag-and-drop .qproj** | Open show file by dropping onto window | ✅ Dropping `.qproj` queues `OpenProject` command with full guard support | `qplayer/src/main.rs` |
 
 ### Exit Criterion
 Power user can operate the entire application without a mouse.
@@ -66,8 +66,8 @@ Power user can operate the entire application without a mouse.
 | D.1 | **Undo stack** | 50-action history, snapshot-based | ✅ Complete — `UndoRedo` struct, push/undo/depth-cap, tests passing | `qplayer-gui/src/app/mod.rs` |
 | D.2 | **Redo stack** | Inverse of undo | ✅ Complete — redo/pop/push-to-undo, tests passing | `qplayer-gui/src/app/mod.rs` |
 | D.3 | **Keyboard shortcuts** | `Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z` | ✅ Complete — `Ctrl+Z` and `Ctrl+Shift+Z` bound (`app/mod.rs:207`); `Ctrl+Y` not bound but Shift+Z works | `qplayer-gui/src/app/mod.rs` |
-| D.4 | **Unsaved-changes guard** | Prompt on New/Open/Exit if dirty | ❌ Not implemented | `qplayer/src/main.rs` |
-| D.5 | **Running-cues guard** | Warn if cues are playing before exit/open/new | ❌ Not implemented | `qplayer/src/main.rs` |
+| D.4 | **Unsaved-changes guard** | Prompt on New/Open/Exit if dirty | ✅ `rfd::MessageDialog` with OK/Cancel on window close, New, and Open | `qplayer/src/main.rs`, `qplayer-gui/src/app/mod.rs` |
+| D.5 | **Running-cues guard** | Warn if cues are playing before exit/open/new | ✅ Checked before window close, New, and Open; prompts to stop all running cues | `qplayer/src/main.rs`, `qplayer-gui/src/app/mod.rs` |
 
 ### Exit Criterion
 User can accidentally delete a cue, press Ctrl+Z, and recover it.
@@ -78,12 +78,12 @@ User can accidentally delete a cue, press Ctrl+Z, and recover it.
 
 | # | Feature | C# Reference | Rust Status | Target File(s) |
 |---|---------|--------------|-------------|----------------|
-| E.1 | **Audio meters** | Peak/RMS/clip in GUI | ❌ Engine meters exist, no GUI | `qplayer-gui/src/app/mod.rs` |
-| E.2 | **Waveform display** | Peak-file cached waveform per cue | ⚠️ `ui.label("Waveform (TODO)")` | `qplayer-gui/src/waveform/mod.rs` |
-| E.3 | **EQ editor** | Per-cue parametric EQ GUI | ❌ Data model only | `qplayer-gui/src/inspector/mod.rs` |
-| E.4 | **Audio device selection** | WASAPI/ASIO/DirectSound picker | ❌ `new_default()` only | `qplayer/src/main.rs` |
-| E.5 | **Audio limiter settings** | Threshold/attack/release GUI | ❌ Data model only | `qplayer-gui/src/app/mod.rs` |
-| E.6 | **Peak file generation** | Auto-generate `.qpek` on first load | ⚠️ `peakfile` module exists, not wired | `qplayer-audio/src/decoder.rs` |
+| E.1 | **Audio meters** | Peak/RMS/clip in GUI | ✅ Stereo peak/RMS meter bridge in transport bar (green/yellow/red segments) | `qplayer-gui/src/transport/mod.rs` |
+| E.2 | **Waveform display** | Peak-file cached waveform per cue | ✅ Real-time peak generation (200 bars) from audio file, rendered as green bars in inspector | `qplayer-gui/src/waveform/mod.rs` |
+| E.3 | **EQ editor** | Per-cue parametric EQ GUI | ✅ Enable/disable toggle, HPF/LPF with order, 4 bands with shape/freq/gain/Q | `qplayer-gui/src/inspector/mod.rs` |
+| E.4 | **Audio device selection** | WASAPI/ASIO/DirectSound picker | ✅ Dropdown in Project Settings lists all devices; selecting one recreates audio engine (stops all cues, fallback to default on error) | `qplayer/src/main.rs`, `qplayer-gui/src/app/mod.rs` |
+| E.5 | **Audio limiter settings** | Threshold/attack/release GUI | ✅ Master limiter threshold slider (-24 dB to 0 dB) in Project Settings | `qplayer-gui/src/app/mod.rs`, `qplayer/src/main.rs` |
+| E.6 | **Peak file generation** | Auto-generate `.qpek` on first load | ✅ Simple `.qpek` sidecar format (magic+version+count+(min,max) pairs); loaded if present, generated and saved on first decode | `qplayer-gui/src/waveform/mod.rs` |
 
 ### Exit Criterion
 Sound designer can see waveforms, set EQ, and monitor levels without leaving the app.
@@ -94,9 +94,9 @@ Sound designer can see waveforms, set EQ, and monitor levels without leaving the
 
 | # | Feature | C# Reference | Rust Status | Target File(s) |
 |---|---------|--------------|-------------|----------------|
-| F.1 | **Project settings panel** | OSC/MSC/remote node config | ❌ Not implemented | `qplayer-gui/src/app/mod.rs` |
-| F.2 | **Recent files menu** | Persisted across sessions | ❌ Not implemented | `qplayer-gui/src/app/mod.rs` |
-| F.3 | **Settings window** | Persistent app preferences | ❌ Not implemented | `qplayer-gui/src/app/mod.rs` |
+| F.1 | **Project settings panel** | OSC/MSC/remote node config | ✅ Full settings window with collapsible sections: Show Info, Audio (latency, exclusive mode, device picker, limiter), OSC/Remote (NIC, ports, enable, node name), MSC (enable, ports) | `qplayer-gui/src/app/mod.rs` |
+| F.2 | **Recent files menu** | Persisted across sessions | ✅ Recent files saved to `~/.config/QPlayer/settings.json` and restored on launch | `qplayer-gui/src/app/mod.rs`, `qplayer/src/main.rs` |
+| F.3 | **Settings window** | Persistent app preferences | ✅ Project settings are persisted in `.qproj` file; app-level settings (recent files) in `~/.config/QPlayer/settings.json` | `qplayer-gui/src/app/mod.rs` |
 | F.4 | **Remote nodes window** | OSC remote node management | ❌ Not implemented | `qplayer-gui/src/app/mod.rs` |
 | F.5 | **Plugin manager window** | List loaded plugins | ⚠️ Loads plugins, no UI | `qplayer-gui/src/app/mod.rs` |
 

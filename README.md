@@ -19,7 +19,13 @@ This repository contains a Rust port of the original [C# QPlayer](https://github
 | **OSC (Open Sound Control)** | ✅ | UDP RX/TX, pattern routing, remote control |
 | **MSC (MIDI Show Control over UDP)** | ✅ | MA-MSC packet parsing, device/executor/page filtering |
 | **Remote show-file transfer** | ✅ | 1 KB block transfer with ACK/NACK + retry |
-| **Plugin architecture** | 🏗️ | WASM sandbox (`wasmtime`) — Phase 6 |
+| **Plugin architecture** | ✅ | WASM sandbox (`wasmtime`) with lifecycle hooks |
+| **Trigger modes** | ✅ | Go / WithLast / AfterLast (auto-trigger chain on cue finish) |
+| **Audio device hot-swap** | ✅ | Runtime device switching via Project Settings |
+| **Waveform display** | ✅ | Per-cue peak visualization in inspector |
+| **Peak file caching** | ✅ | `.qpek` sidecar files for instant waveform reload |
+| **Context menus** | ✅ | Right-click cue row → Move/Duplicate/Delete/Add |
+| **Project settings** | ✅ | Collapsible Audio / OSC / MSC configuration panel |
 | **Save / Save As** | ✅ | `.qproj` serialization with dirty tracking |
 | **Autosave** | ✅ | 5 rotating backups every 60 s |
 | **Crash recovery** | ✅ | `human-panic` + SIGINT emergency save |
@@ -29,7 +35,14 @@ This repository contains a Rust port of the original [C# QPlayer](https://github
 | **Undo / redo** | ✅ | Snapshot-based history (50 deep), Ctrl+Z / Ctrl+Shift+Z |
 | **Editable inspector** | ✅ | Text inputs, sliders, combo boxes for all cue fields |
 | **Add / delete / duplicate cues** | ✅ | Toolbar, context menu, Ctrl+T/D, Delete key |
-| **Keyboard shortcuts** | ✅ | Space=Go, Esc=Stop, Del=Delete, Ctrl+Z/Shift+Z |
+| **Keyboard shortcuts** | ✅ | Space=Go, Esc=Stop, Del=Delete, Ctrl+N/O/S/T/D, Ctrl+Z/Shift+Z |
+| **Drag & drop reordering** | ✅ | Drag handle (≡) to reorder cues in list |
+| **Colour picker** | ✅ | Per-cue colour in inspector |
+| **EQ editor** | ✅ | HPF/LPF + 4-band parametric EQ GUI in inspector |
+| **Audio meters** | ✅ | Stereo peak/RMS LED ladder in transport bar |
+| **Recent files** | ✅ | Persisted to `~/.config/QPlayer/settings.json` |
+| **Running-cues guard** | ✅ | Warn before exit/open/new if cues are playing |
+| **Unsaved-changes guard** | ✅ | Prompt before discarding dirty project |
 
 ---
 
@@ -120,7 +133,7 @@ cargo test --workspace
 # Individual crates
 cargo test -p qplayer-core      # 22 tests — serde round-trip, migrations
 cargo test -p qplayer-audio     # 38 tests — mixer, FX chain, decoder
-cargo test -p qplayer-gui       #  2 tests — app state, command dispatch
+cargo test -p qplayer-gui       #  3 tests — app state, command dispatch, undo/redo
 cargo test -p qplayer-protocols #  6 tests — OSC router, MSC parser, block-transfer
 ```
 
@@ -136,9 +149,8 @@ cargo test -p qplayer-protocols #  6 tests — OSC router, MSC parser, block-tra
 | 3 — GUI | egui skeleton, cue list, inspector | ✅ Complete (2 tests) |
 | 4 — Integration + Video | A/V sync, dual window, `VideoCue` | ✅ Complete |
 | 5 — Protocols | OSC, MSC, remote control | ✅ Complete (6 tests) |
-| 6 — Plugins | WASM plugin ABI + port OSC/MagicQ | 🏗️ In progress |
-| 6 — Plugins | WASM plugin host with lifecycle hooks, hello-plugin example | ✅ Complete |
-| 7 — Polish | Save, autosave, crash recovery, drag-drop, single instance, undo/redo | ✅ Complete |
+| 6 — Plugins | WASM plugin host with lifecycle hooks, hello-plugin example | ✅ Complete (2 tests) |
+| 7 — Polish | Save, autosave, crash recovery, drag-drop, single instance, undo/redo, settings, waveform | ✅ Complete |
 
 See [`PORTING_GUIDE.md`](PORTING_GUIDE.md) for the full design rationale, NFR targets, and detailed phase breakdown.
 
@@ -191,4 +203,4 @@ The original C# QPlayer is licensed under the **GPL-3.0** (see `Qplayer-Csharp/L
 
 ---
 
-*Last updated: 2026-04-22 — Phase 5 complete (68 tests passing).*
+*Last updated: 2026-04-22 — Phase 7 complete, all GUI interactivity features implemented (71 tests passing).*
