@@ -688,8 +688,22 @@ Estimates assume one full-time developer with Rust experience. Each phase has an
 | End-to-end playback | ✅ | `Go` on `VideoCue` opens audio decoder + video source simultaneously; audio clock is sync master |
 | **Phase 4 Status** | **✅ COMPLETE** | **22 core + 38 audio + 2 GUI tests passing; dual-window binary compiles** |
 
+### Phase 5 Progress
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `OscDriver` (UDP RX/TX) | ✅ | Async `tokio::net::UdpSocket`, broadcast TX, spawns RX task |
+| `OscRouter` (pattern matching) | ✅ | Trie-based with `?` wildcard; exact + wildcard dispatch tested |
+| `OscManager` (high-level) | ✅ | Subscribe by pattern, remote control helpers (`send_remote_go`, etc.), discovery |
+| `MamscPacket` (binary parser) | ✅ | `GMA\0MSC\0` header + MIDI sysex MSC payload; Go/Stop/Resume/TimedGo/Set/Fire/GoOff |
+| `MamscDriver` (MA-MSC UDP) | ✅ | Async UDP RX/TX, subscriber dispatch by `MscCommandFlags` |
+| `MscManager` (high-level) | ✅ | Device/executor/page filtering, event channel |
+| `ShowFileSender` / `ShowFileReceiver` | ✅ | 1 KB block transfer with ACK/NACK, 250 ms retry, 5 s timeout |
+| Integration (`qplayer` binary) | ✅ | OSC + MSC managers wired into `AppCommand` queue; dual-window binary compiles |
+| **Phase 5 Status** | **✅ COMPLETE** | **6 protocol tests passing; workspace clean build** |
+
 | 4: Integration + Video | 3 weeks | Wire audio + GUI + video + file I/O | Can load a show, press Go, hear audio + see video, save changes | Medium | ✅ **Complete** |
-| 5: Protocols | 1 week | OSC, MSC, remote control | Existing iPad remote control client connects and triggers cues | Low | ⏳ **Pending** |
+| 5: Protocols | 1 week | OSC, MSC, remote control | Existing iPad remote control client connects and triggers cues | Low | ✅ **Complete** |
 | 6: Plugins | 1–2 weeks | Plugin ABI + port OSC/MagicQ plugins | Both ported plugins load and function; plugin crash does not crash host | **High** | ⏳ **Pending** |
 | 7: Polish | 2 weeks | Undo, drag-drop, packaging, docs | Installers built on all 3 OSes; NFR regression suite green | Low | ⏳ **Pending** |
 | **Total** | **15–18 weeks** | **Feature-complete Rust QPlayer** | NFRs met; C# feature parity checklist 100% | | |
@@ -1154,7 +1168,7 @@ strategy:
 
 ---
 
-*Document version: 1.2*
+*Document version: 1.3*
 *Created: 2026-04-22*
-*Last revised: 2026-04-22 (Phase 4 complete — A/V sync, dual-window video playback, VideoCue model, custom winit event loop)*
-*Next review: After Phase 5 (Protocols) completion*
+*Last revised: 2026-04-22 (Phase 5 complete — OSC driver/router/manager, MA-MSC driver/manager, remote block-transfer, all wired into main binary)*
+*Next review: After Phase 6 (Plugin Architecture) completion*

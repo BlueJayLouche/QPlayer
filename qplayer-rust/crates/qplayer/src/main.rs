@@ -8,10 +8,13 @@
 
 use qplayer_audio::{AudioEngine, FfmpegDecoder};
 use qplayer_gui::{AppCommand, QPlayerApp};
+use qplayer_protocols::msc::{MscCommandFlags, MscEvent, MscManager};
+use qplayer_protocols::osc::{OscEvent, OscManager};
 use qplayer_video::{Renderer, Texture, VideoFrame, VideoSource};
+use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -58,7 +61,6 @@ struct App {
     qplayer: QPlayerApp,
     window_ids: Option<WindowIds>,
 
-
     // ── audio ──
     audio_engine: AudioEngine,
 
@@ -70,6 +72,14 @@ struct App {
     video_frame_dirty: bool,
     video_start_clock: Option<Duration>,
     video_stop_flag: Arc<AtomicBool>,
+
+    // ── protocols ──
+    osc_manager: Option<OscManager>,
+    osc_rx: Option<std::sync::mpsc::Receiver<OscEvent>>,
+    #[allow(dead_code)]
+    msc_manager: Option<MscManager>,
+    msc_rx: Option<std::sync::mpsc::Receiver<MscEvent>>,
+    last_discovery: Instant,
 }
 
 impl App {
@@ -82,6 +92,53 @@ impl App {
     ) -> Self {
         let audio_engine = AudioEngine::new_default().expect("audio engine init failed");
         let qplayer = QPlayerApp::new();
+
+        // Default protocol settings (TODO: load from project settings)
+        let nic = Ipv4Addr::new(127, 0, 0, 1);
+        let subnet = Ipv4Addr::new(255, 255, 255, 0);
+
+        let (osc_manager, osc_rx) = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            match OscManager::new(nic, 9000, 9001, subnet, tx) {
+                Ok(m) => {
+                    log::info!("OSC manager started on {}:9000", nic);
+                    (Some(m), Some(rx))
+                }
+                Err(e) => {
+                    log::error!("Failed to start OSC manager: {e}");
+                    (None, Some(rx))
+                }
+            }
+        };
+
+        let (msc_manager, msc_rx) = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            match MscManager::new(nic, 7000, 7001, subnet, tx.clone()) {
+                Ok(m) => {
+                    log::info!("MSC manager started on {}:7000", nic);
+                    // Wire default MSC subscriptions
+                    m.subscribe(MscCommandFlags::GO | MscCommandFlags::TIMED_GO, move |pkt| {
+                        let event = match &pkt.data {
+                            qplayer_protocols::msc::MscData::Go { qid, executor, page } => {
+                                Some(MscEvent::Go { qid: qid.clone(), executor: *executor, page: *page })
+                            }
+                            qplayer_protocols::msc::MscData::TimedGo { qid, executor, page, time } => {
+                                Some(MscEvent::TimedGo { qid: qid.clone(), executor: *executor, page: *page, time: *time })
+                            }
+                            _ => None,
+                        };
+                        if let Some(ev) = event {
+                            let _ = tx.send(ev);
+                        }
+                    });
+                    (Some(m), Some(rx))
+                }
+                Err(e) => {
+                    log::error!("Failed to start MSC manager: {e}");
+                    (None, Some(rx))
+                }
+            }
+        };
 
         Self {
             instance,
@@ -107,6 +164,11 @@ impl App {
             video_frame_dirty: false,
             video_start_clock: None,
             video_stop_flag: Arc::new(AtomicBool::new(false)),
+            osc_manager,
+            osc_rx,
+            msc_manager,
+            msc_rx,
+            last_discovery: Instant::now(),
         }
     }
 
@@ -297,6 +359,89 @@ impl App {
                 AppCommand::Go => self.handle_go(event_loop),
                 AppCommand::Stop => self.stop_all(),
                 _ => {}
+            }
+        }
+    }
+
+    /// Drain OSC/MSC events and translate them into AppCommands.
+    fn process_protocol_events(&mut self) {
+        if let Some(rx) = &self.osc_rx {
+            while let Ok(ev) = rx.try_recv() {
+                log::debug!("OSC event: {ev:?}");
+                match ev {
+                    OscEvent::Go { qid } => {
+                        if let Some(qid_str) = qid {
+                            if let Ok(qid_dec) = qid_str.parse::<rust_decimal::Decimal>() {
+                                let _ = self.qplayer.state().lock().map(|mut s| s.selected_cue_id = Some(qid_dec));
+                            }
+                        }
+                        if let Ok(mut state) = self.qplayer.state().lock() {
+                            state.command_queue.push(AppCommand::Go);
+                        }
+                    }
+                    OscEvent::Stop { qid: _ } => {
+                        if let Ok(mut state) = self.qplayer.state().lock() {
+                            state.command_queue.push(AppCommand::Stop);
+                        }
+                    }
+                    OscEvent::Pause { .. } => {}
+                    OscEvent::Unpause { .. } => {}
+                    OscEvent::Select { qid } => {
+                        if let Ok(qid_dec) = qid.parse::<rust_decimal::Decimal>() {
+                            let _ = self.qplayer.state().lock().map(|mut s| s.selected_cue_id = Some(qid_dec));
+                        }
+                    }
+                    OscEvent::Up => {}
+                    OscEvent::Down => {}
+                    OscEvent::Save => {
+                        if let Ok(mut state) = self.qplayer.state().lock() {
+                            state.command_queue.push(AppCommand::SaveProject);
+                        }
+                    }
+                    OscEvent::RemotePing => {
+                        if let Some(osc) = &self.osc_manager {
+                            let _ = osc.send(rosc::OscMessage {
+                                addr: "/qplayer/remote/pong".into(),
+                                args: vec![],
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if let Some(rx) = &self.msc_rx {
+            while let Ok(ev) = rx.try_recv() {
+                log::debug!("MSC event: {ev:?}");
+                match ev {
+                    MscEvent::Go { qid, .. } | MscEvent::TimedGo { qid, .. } => {
+                        if let Ok(qid_dec) = qid.parse::<rust_decimal::Decimal>() {
+                            let _ = self.qplayer.state().lock().map(|mut s| s.selected_cue_id = Some(qid_dec));
+                        }
+                        if let Ok(mut state) = self.qplayer.state().lock() {
+                            state.command_queue.push(AppCommand::Go);
+                        }
+                    }
+                    MscEvent::Stop { .. } => {
+                        if let Ok(mut state) = self.qplayer.state().lock() {
+                            state.command_queue.push(AppCommand::Stop);
+                        }
+                    }
+                    MscEvent::Resume { .. } => {}
+                    _ => {}
+                }
+            }
+        }
+
+        // Discovery broadcast every 1 second
+        if self.last_discovery.elapsed() >= Duration::from_secs(1) {
+            self.last_discovery = Instant::now();
+            if let Some(osc) = &self.osc_manager {
+                let _ = osc.send(rosc::OscMessage {
+                    addr: "/qplayer/remote/discovery".into(),
+                    args: vec![rosc::OscType::String("QPlayer-Rust".into())],
+                });
             }
         }
     }
@@ -500,6 +645,8 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        self.process_protocol_events();
+
         // Continuously redraw both windows when active.
         if let Some(window) = self.control_window.as_ref() {
             window.request_redraw();
