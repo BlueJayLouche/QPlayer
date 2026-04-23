@@ -1490,7 +1490,26 @@ impl App {
             label: Some("video-encoder"),
         });
 
-        renderer.render(&mut encoder, &view, texture.current_bind_group());
+        // If no video is active, just clear to black instead of drawing the last frame.
+        let has_video = self.current_video_qid.is_some() || self.latest_video_frame.is_some();
+        if has_video {
+            renderer.render(&mut encoder, &view, texture.current_bind_group());
+        } else {
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("video-clear-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+        }
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
     }
