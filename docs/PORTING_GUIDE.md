@@ -33,7 +33,7 @@ Any phase that regresses against these targets without explicit tradeoff approva
 
 > **Phase 1 Status: ✅ COMPLETE** — `qplayer-core` crate compiles, all domain models ported, 21 tests passing.
 > 
-> Completed: 2026-04-22. See `qplayer-rust/crates/qplayer-core/`.
+> Completed: 2026-04-22. See `crates/qplayer-core/`.
 
 These decisions are now locked and recorded. They block downstream phases as noted.
 
@@ -115,7 +115,6 @@ Qplayer-Csharp/
 
 **Current Rust Workspace:**
 ```
-qplayer-rust/
 ├── Cargo.toml                  # Workspace definition
 ├── crates/
 │   ├── qplayer-core/           # Domain models + serialization

@@ -51,7 +51,6 @@ This repository contains a Rust port of the original [C# QPlayer](https://github
 The Rust workspace is split into focused crates:
 
 ```
-qplayer-rust/
 ├── crates/
 │   ├── qplayer-core/        # Domain models, serialization, show-file migrations
 │   ├── qplayer-audio/       # Real-time audio engine (cpal + FFmpeg decode)
@@ -104,7 +103,6 @@ sudo apt install libavcodec-dev libavformat-dev libavutil-dev \
 ### Compile
 
 ```bash
-cd qplayer-rust
 cargo build --release
 ```
 
@@ -125,8 +123,6 @@ cargo run -p qplayer -- /path/to/show.qproj
 ## Testing
 
 ```bash
-cd qplayer-rust
-
 # Full workspace test suite
 cargo test --workspace
 

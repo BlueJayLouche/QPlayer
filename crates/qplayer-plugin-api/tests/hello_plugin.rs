@@ -7,7 +7,7 @@ fn wasm_path() -> PathBuf {
     // target/wasm32-unknown-unknown/debug/hello_plugin.wasm
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.pop(); // crates
-    path.pop(); // qplayer-rust
+    path.pop(); // workspace root
     path.push("target");
     path.push("wasm32-unknown-unknown");
     path.push("debug");
