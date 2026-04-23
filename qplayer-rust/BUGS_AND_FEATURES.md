@@ -10,9 +10,9 @@
 |:---|:---|:---|
 | 2 | Cue enable toggle has no effect | Added `cue.enabled()` guards in `play_cue`, `handle_go`, TimeCode trigger |
 | 9 | Error on video with no audio | Downgraded `StreamNotFound` log from `ERROR` → `INFO` |
-| 1 | Pause doesn't pause video | Freeze `frame_counter` when paused; added `video_pause_flag` to decode thread |
-| 3 | QID field not editable | Added stable `id_salt` to inspector QID `TextEdit` |
-| 4 | Audio garbled on pcm_f32le WAV | Derive channel layout when undefined; bypass SwrContext for f32-packed sources |
+| 1 | Pause doesn't pause video | Track pause duration in video thread; added `video_pause_flag` to decode thread |
+| 3 | QID field not editable | Persist editing text in egui temp data so it's not overwritten every frame |
+| 4 | Audio garbled on pcm_f32le WAV | Derive channel layout when undefined (fixes SwrContext misbehaviour) |
 | 8 | Looping video only loops audio | Added `loop_counter` to `LoopProcessor`; restart video thread + reset GUI progress on loop |
 | 5 | UI column alignment / width | Unified `COL_*` width constants in cue list header + body |
 
@@ -32,7 +32,7 @@
 |:---|:---|
 | **Severity** | High |
 | **Affected crates** | `qplayer-video`, `qplayer-audio`, `qplayer` (main loop) |
-| **Fix** | `frame_counter` in `mixer.rs` now only advances when at least one input is active. Added `video_pause_flag: Arc<AtomicBool>` that stops the decode thread from reading frames during pause. |
+| **Fix** | Reverted the `frame_counter` freeze (it broke silent videos). Instead, the video decode thread now tracks how long it was paused (`paused_at` + `total_pause`) and subtracts that from the elapsed time used for frame scheduling. Added `video_pause_flag` to stop the decoder from reading ahead during pause. |
 
 ---
 
@@ -60,7 +60,7 @@
 | **Severity** | High |
 | **Affected crates** | `qplayer-audio` (decoder / resampler) |
 | **Sample file metadata** | `FREDERICK_90.09_03.wav_L-DlgMtch_01.wav` <br>• Format: WAV <br>• Codec: `pcm_f32le` ([3][0][0][0] / 0x0003) <br>• Sample rate: 48 000 Hz <br>• Channels: 1 (mono) <br>• Bitrate: 1536 kb/s |
-| **Fix** | Pro Tools exports often leave `channel_layout = 0` (undefined). SwrContext misbehaves with undefined layouts. Now deriving `ChannelLayout::default(channels)` when `bits() == 0`. Also bypass SwrContext entirely when source is already `F32(Packed)` — no conversion needed. |
+| **Fix** | Pro Tools exports often leave `channel_layout = 0` (undefined). SwrContext misbehaves with undefined layouts, producing incorrect channel mappings. Now deriving `ChannelLayout::default(channels)` when `bits() == 0` before passing it to SwrContext. |
 
 ---
 

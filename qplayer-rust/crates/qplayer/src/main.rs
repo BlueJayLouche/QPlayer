@@ -1707,26 +1707,40 @@ fn video_decode_thread(
         }
     };
 
+    let mut paused_at: Option<Duration> = None;
+    let mut total_pause = Duration::ZERO;
+
     while !stop_flag.load(Ordering::Relaxed) {
         // When paused, sleep without decoding so we don't read ahead.
         if pause_flag.load(Ordering::Relaxed) {
+            if paused_at.is_none() {
+                paused_at = Some(clock());
+            }
             std::thread::sleep(Duration::from_millis(10));
             continue;
         }
 
+        // Just resumed — accumulate the pause duration so we don't fast-forward.
+        if let Some(start) = paused_at.take() {
+            total_pause += clock().saturating_sub(start);
+        }
+
         match source.read_frame() {
             Some(frame) => {
-                let elapsed = clock().saturating_sub(start_clock);
+                let elapsed = clock().saturating_sub(start_clock).saturating_sub(total_pause);
                 let frame_due = Duration::from_secs_f64(frame.pts.max(0.0));
 
                 if frame_due > elapsed {
                     let sleep_for = frame_due - elapsed;
-                    // Cap sleep to avoid missing stop/pause signals for too long
+                    // Cap sleep to avoid missing stop signals for too long
                     std::thread::sleep(sleep_for.min(Duration::from_millis(50)));
                 }
 
-                if stop_flag.load(Ordering::Relaxed) || pause_flag.load(Ordering::Relaxed) {
+                if stop_flag.load(Ordering::Relaxed) {
                     break;
+                }
+                if pause_flag.load(Ordering::Relaxed) {
+                    continue;
                 }
 
                 if proxy.send_event(AppEvent::VideoFrame(frame)).is_err() {

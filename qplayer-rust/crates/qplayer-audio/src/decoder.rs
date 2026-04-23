@@ -64,24 +64,19 @@ impl FfmpegDecoder {
         };
 
         // SwrContext: convert decoder's native format → f32 packed (interleaved).
-        // If the source is already f32 packed, we can skip SwrContext entirely —
-        // the resampler (if needed) and MonoToStereo converter handle the rest.
-        let swr = match decoder.format() {
-            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed) => None,
-            _ => match ffmpeg::software::resampling::context::Context::get(
-                decoder.format(),
-                channel_layout,
-                sample_rate,
-                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-                channel_layout,
-                sample_rate,
-            ) {
-                Ok(ctx) => Some(ctx),
-                Err(e) => {
-                    log::warn!("SwrContext init failed (format={:?}, layout={:?}, sr={}): {}. Will use fallback.",
-                        decoder.format(), channel_layout, sample_rate, e);
-                    None
-                }
+        let swr = match ffmpeg::software::resampling::context::Context::get(
+            decoder.format(),
+            channel_layout,
+            sample_rate,
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+            channel_layout,
+            sample_rate,
+        ) {
+            Ok(ctx) => Some(ctx),
+            Err(e) => {
+                log::warn!("SwrContext init failed (format={:?}, layout={:?}, sr={}): {}. Will use fallback.",
+                    decoder.format(), channel_layout, sample_rate, e);
+                None
             }
         };
 

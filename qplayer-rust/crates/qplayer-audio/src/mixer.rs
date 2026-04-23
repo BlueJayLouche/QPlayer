@@ -224,12 +224,10 @@ impl Mixer {
         // Read snapshot without locking (main thread guarantees atomic update)
         let snapshot = self.snapshot.lock().unwrap();
 
-        let mut any_active = false;
         for input in snapshot.iter() {
             if !input.is_active() {
                 continue;
             }
-            any_active = true;
 
             // Get temp buffer — this is a Mutex lock, but only the audio thread
             // accesses it, so it never contends. We use try_lock to be safe.
@@ -311,11 +309,8 @@ impl Mixer {
             }
         }
 
-        // Advance the master audio clock only when something is actually playing.
-        // This keeps video in sync during pause (when all inputs are inactive).
-        if any_active {
-            self.frame_counter.fetch_add(frames as u64, Ordering::Relaxed);
-        }
+        // Advance the master audio clock.
+        self.frame_counter.fetch_add(frames as u64, Ordering::Relaxed);
     }
 
     /// Current playback time according to the audio master clock.

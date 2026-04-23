@@ -73,11 +73,31 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
     });
     ui.horizontal(|ui| {
         ui.label("QID:");
-        let mut qid_str = base.qid.to_string();
+        // Use a persistent ID so egui can maintain focus and cursor state.
+        let id = ui.make_persistent_id("inspector_qid");
+        // Read any in-progress edit from egui's temp storage so typing isn't
+        // overwritten every frame by base.qid.to_string().
+        let mut qid_str = ui.ctx().data(|data| {
+            data.get_temp::<String>(id)
+        }).unwrap_or_else(|| base.qid.to_string());
+
         let response = ui.add(
             egui::TextEdit::singleline(&mut qid_str)
-                .id_salt(egui::Id::new(("inspector_qid", base.qid))),
+                .id(id),
         );
+
+        if response.has_focus() {
+            // While editing, store the live text in egui temp data.
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(id, qid_str.clone());
+            });
+        } else {
+            // Focus lost — clear temp data so next time we start from base.qid.
+            ui.ctx().data_mut(|data| {
+                data.remove_temp::<String>(id);
+            });
+        }
+
         if response.lost_focus() {
             if let Ok(new_qid) = qid_str.parse::<rust_decimal::Decimal>() {
                 if new_qid != base.qid {
