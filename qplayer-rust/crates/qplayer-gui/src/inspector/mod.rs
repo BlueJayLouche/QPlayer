@@ -74,7 +74,10 @@ pub fn show(ui: &mut egui::Ui, state: &SharedStateHandle) {
     ui.horizontal(|ui| {
         ui.label("QID:");
         let mut qid_str = base.qid.to_string();
-        let response = ui.text_edit_singleline(&mut qid_str);
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut qid_str)
+                .id_salt(egui::Id::new(("inspector_qid", base.qid))),
+        );
         if response.lost_focus() {
             if let Ok(new_qid) = qid_str.parse::<rust_decimal::Decimal>() {
                 if new_qid != base.qid {

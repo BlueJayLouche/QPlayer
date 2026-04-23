@@ -8,6 +8,7 @@ use crate::SampleProvider;
 use qplayer_core::LoopMode;
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Loop and trim processor.
 pub struct LoopProcessor {
@@ -18,6 +19,9 @@ pub struct LoopProcessor {
     cmd_end_frame: AtomicU64, // 0 = play to end
     cmd_loop_mode: AtomicU8,
     cmd_loop_count: AtomicU32,
+    /// Optional external counter incremented each time a loop boundary is crossed.
+    /// Allows the main thread to synchronise video loops without locking.
+    loop_counter: Option<Arc<AtomicU32>>,
 }
 
 struct LoopInner {
@@ -50,7 +54,14 @@ impl LoopProcessor {
             cmd_end_frame: AtomicU64::new(0),
             cmd_loop_mode: AtomicU8::new(LoopMode::OneShot as u8),
             cmd_loop_count: AtomicU32::new(1),
+            loop_counter: None,
         }
+    }
+
+    /// Attach an external atomic counter that will be incremented on every loop.
+    pub fn with_loop_counter(mut self, counter: Arc<AtomicU32>) -> Self {
+        self.loop_counter = Some(counter);
+        self
     }
 
     pub fn set_loop(&self, start_frame: u64, end_frame: u64, mode: LoopMode, count: u32) {
@@ -148,12 +159,18 @@ impl SampleProvider for LoopProcessor {
                             break;
                         }
                         inner.played_loops += 1;
+                        if let Some(ref counter) = self.loop_counter {
+                            counter.fetch_add(1, Ordering::Relaxed);
+                        }
                         self.source
                             .seek(self.frames_to_samples(inner.start_frame));
                         continue;
                     }
                     LoopMode::LoopedInfinite => {
                         inner.played_loops += 1;
+                        if let Some(ref counter) = self.loop_counter {
+                            counter.fetch_add(1, Ordering::Relaxed);
+                        }
                         self.source
                             .seek(self.frames_to_samples(inner.start_frame));
                         continue;

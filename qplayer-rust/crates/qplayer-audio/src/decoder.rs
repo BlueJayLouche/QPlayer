@@ -46,6 +46,14 @@ impl FfmpegDecoder {
         let sample_rate = decoder.rate() as u32;
         let channels = decoder.channels() as u16;
         let channel_layout = decoder.channel_layout();
+        // Pro Tools and some exporters leave channel_layout as 0 (undefined).
+        // SwrContext misbehaves with an undefined layout, so derive one from the channel count.
+        let channel_layout = if channel_layout.bits() == 0 {
+            log::debug!("Undefined channel layout for {}; deriving from {} channels", path, channels);
+            ffmpeg::ChannelLayout::default(channels as i32)
+        } else {
+            channel_layout
+        };
 
         let duration = input.duration();
         let total_samples = if duration > 0 {
@@ -55,20 +63,25 @@ impl FfmpegDecoder {
             None
         };
 
-        // SwrContext: convert decoder's native format → f32 packed (interleaved)
-        let swr = match ffmpeg::software::resampling::context::Context::get(
-            decoder.format(),
-            channel_layout,
-            sample_rate,
-            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-            channel_layout,
-            sample_rate,
-        ) {
-            Ok(ctx) => Some(ctx),
-            Err(e) => {
-                log::warn!("SwrContext init failed (format={:?}, layout={:?}, sr={}): {}. Will use fallback.",
-                    decoder.format(), channel_layout, sample_rate, e);
-                None
+        // SwrContext: convert decoder's native format → f32 packed (interleaved).
+        // If the source is already f32 packed, we can skip SwrContext entirely —
+        // the resampler (if needed) and MonoToStereo converter handle the rest.
+        let swr = match decoder.format() {
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed) => None,
+            _ => match ffmpeg::software::resampling::context::Context::get(
+                decoder.format(),
+                channel_layout,
+                sample_rate,
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                channel_layout,
+                sample_rate,
+            ) {
+                Ok(ctx) => Some(ctx),
+                Err(e) => {
+                    log::warn!("SwrContext init failed (format={:?}, layout={:?}, sr={}): {}. Will use fallback.",
+                        decoder.format(), channel_layout, sample_rate, e);
+                    None
+                }
             }
         };
 

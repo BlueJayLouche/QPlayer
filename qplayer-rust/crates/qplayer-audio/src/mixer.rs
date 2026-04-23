@@ -219,17 +219,17 @@ impl Mixer {
         // Clear output
         buffer.fill(0.0);
 
-        // Advance the master audio clock.
         let frames = buffer.len() / self.channels.max(1) as usize;
-        self.frame_counter.fetch_add(frames as u64, Ordering::Relaxed);
 
         // Read snapshot without locking (main thread guarantees atomic update)
         let snapshot = self.snapshot.lock().unwrap();
 
+        let mut any_active = false;
         for input in snapshot.iter() {
             if !input.is_active() {
                 continue;
             }
+            any_active = true;
 
             // Get temp buffer — this is a Mutex lock, but only the audio thread
             // accesses it, so it never contends. We use try_lock to be safe.
@@ -309,6 +309,12 @@ impl Mixer {
             } else {
                 apply_volume_pan_mix_mono(&temp[..read], buffer, volume);
             }
+        }
+
+        // Advance the master audio clock only when something is actually playing.
+        // This keeps video in sync during pause (when all inputs are inactive).
+        if any_active {
+            self.frame_counter.fetch_add(frames as u64, Ordering::Relaxed);
         }
     }
 

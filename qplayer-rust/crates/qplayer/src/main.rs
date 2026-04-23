@@ -47,6 +47,13 @@ struct ActiveCue {
     name: String,
     input: std::sync::Arc<qplayer_audio::MixerInput>,
     state: CueState,
+    /// Shared counter incremented by LoopProcessor on each loop boundary.
+    loop_counter: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
+    /// Last known loop count (used to detect new loops).
+    video_loop_count: u32,
+    /// Loop boundaries in frames, for computing loop-relative position.
+    loop_start_frame: u64,
+    loop_end_frame: u64,
 }
 
 /// A cue that is waiting for its delay timer to expire before playing.
@@ -97,6 +104,9 @@ struct App {
     video_frame_dirty: bool,
     video_start_clock: Option<Duration>,
     video_stop_flag: Arc<AtomicBool>,
+    video_pause_flag: Arc<AtomicBool>,
+    /// QID of the cue whose video is currently playing (for loop sync).
+    current_video_qid: Option<rust_decimal::Decimal>,
 
     // ── protocols ──
     osc_manager: Option<OscManager>,
@@ -240,6 +250,8 @@ impl App {
             video_frame_dirty: false,
             video_start_clock: None,
             video_stop_flag: Arc::new(AtomicBool::new(false)),
+            video_pause_flag: Arc::new(AtomicBool::new(false)),
+            current_video_qid: None,
             osc_manager,
             osc_rx,
             msc_manager,
@@ -400,6 +412,14 @@ impl App {
             let mut result = Vec::new();
             for i in start_idx..state.show_file.cues.len() {
                 let cue = &state.show_file.cues[i];
+                if !cue.enabled() {
+                    if i == start_idx {
+                        // The primary cue we wanted to play is disabled — stop here
+                        break;
+                    }
+                    // A WithLast follower is disabled — skip it but keep looking for more followers
+                    continue;
+                }
                 if i == start_idx || cue.base().trigger == qplayer_core::TriggerMode::WithLast {
                     result.push(cue.clone());
                 } else {
@@ -433,6 +453,11 @@ impl App {
     }
 
     fn play_cue(&mut self, cue: &qplayer_core::Cue, event_loop: &ActiveEventLoop) {
+        if !cue.enabled() {
+            log::info!("Skipping disabled cue Q{}", cue.base().qid);
+            return;
+        }
+
         let qid = cue.base().qid;
         let name = cue.base().name.clone();
         let delay = cue.base().delay;
@@ -493,7 +518,7 @@ impl App {
             qplayer_core::Cue::Video { path, start_time, duration, volume, fade_in, fade_out, fade_type, .. } => {
                 log::info!("Go VideoCue: {}", path);
                 self.play_audio(path, qid, &name, cue.base().loop_mode, cue.base().loop_count, *start_time, *duration, *volume, *fade_in, *fade_out, *fade_type, false);
-                self.play_video(path, event_loop);
+                self.play_video(path, qid, event_loop);
             }
             qplayer_core::Cue::Stop { stop_qid, fade_out_time, fade_type, .. } => {
                 log::info!("Go StopCue -> stop Q{}", stop_qid);
@@ -591,14 +616,32 @@ impl App {
         match FfmpegDecoder::open(&resolved) {
             Ok(decoder) => {
                 let sample_rate = decoder.sample_rate();
-                let loop_proc = qplayer_audio::LoopProcessor::new(Box::new(decoder));
                 let start_frame = (start_time.as_secs_f64() * sample_rate as f64) as u64;
                 let end_frame = if duration.as_secs_f64() > 0.0 {
                     start_frame + (duration.as_secs_f64() * sample_rate as f64) as u64
                 } else {
                     0 // auto-detect from source length
                 };
-                loop_proc.set_loop(start_frame, end_frame, loop_mode, loop_count as u32);
+
+                // Create a shared loop counter so the main thread can detect loop boundaries
+                // and synchronise video restarts + progress-bar resets.
+                let is_looped = loop_mode == qplayer_core::LoopMode::Looped
+                    || loop_mode == qplayer_core::LoopMode::LoopedInfinite;
+                let loop_counter: Option<std::sync::Arc<std::sync::atomic::AtomicU32>> = if is_looped {
+                    Some(std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)))
+                } else {
+                    None
+                };
+
+                let loop_proc = {
+                    let proc = qplayer_audio::LoopProcessor::new(Box::new(decoder));
+                    proc.set_loop(start_frame, end_frame, loop_mode, loop_count as u32);
+                    if let Some(ref counter) = loop_counter {
+                        proc.with_loop_counter(std::sync::Arc::clone(counter))
+                    } else {
+                        proc
+                    }
+                };
 
                 // Wire fade processor for fade-in
                 let mut source: Box<dyn SampleProvider> = Box::new(loop_proc);
@@ -618,15 +661,28 @@ impl App {
 
                 let state = if preload_only {
                     CueState::Ready
-                } else if loop_mode == qplayer_core::LoopMode::Looped || loop_mode == qplayer_core::LoopMode::LoopedInfinite {
+                } else if is_looped {
                     CueState::PlayingLooped
                 } else {
                     CueState::Playing
                 };
-                self.active_cues.push(ActiveCue { qid, name: name.to_string(), input, state });
+                self.active_cues.push(ActiveCue {
+                    qid,
+                    name: name.to_string(),
+                    input,
+                    state,
+                    loop_counter,
+                    video_loop_count: 0,
+                    loop_start_frame: start_frame,
+                    loop_end_frame: end_frame,
+                });
             }
             Err(e) => {
-                log::error!("Failed to open audio for {}: {}", path, e);
+                if let qplayer_audio::FfmpegError::StreamNotFound = e {
+                    log::info!("No audio stream in {} — playing silent", path);
+                } else {
+                    log::error!("Failed to open audio for {}: {}", path, e);
+                }
             }
         }
     }
@@ -786,10 +842,13 @@ impl App {
         }
     }
 
-    fn play_video(&mut self, path: &str, event_loop: &ActiveEventLoop) {
+    fn play_video(&mut self, path: &str, qid: rust_decimal::Decimal, event_loop: &ActiveEventLoop) {
         self.create_video_window(event_loop);
         self.video_stop_flag.store(false, Ordering::Relaxed);
+        // A newly-started video should always play, even if the system was paused.
+        self.video_pause_flag.store(false, Ordering::Relaxed);
         self.video_start_clock = Some(self.audio_engine.playback_time());
+        self.current_video_qid = Some(qid);
         self.latest_video_frame = None;
         self.video_frame_dirty = false;
 
@@ -809,21 +868,33 @@ impl App {
         };
         let start = self.video_start_clock.unwrap();
         let stop_flag = Arc::clone(&self.video_stop_flag);
+        let pause_flag = Arc::clone(&self.video_pause_flag);
         let proxy = self.event_loop_proxy.clone();
 
         std::thread::Builder::new()
             .name("video-decode".into())
             .spawn(move || {
-                video_decode_thread(&path, clock, start, stop_flag, proxy);
+                video_decode_thread(&path, clock, start, stop_flag, pause_flag, proxy);
             })
             .expect("spawn video decode thread");
     }
 
+    /// Restart the current video decode thread (used when audio loops).
+    fn restart_video(&mut self, path: &str, qid: rust_decimal::Decimal, event_loop: &ActiveEventLoop) {
+        self.video_stop_flag.store(true, Ordering::Relaxed);
+        // Brief yield to let the old thread exit its read loop
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        self.play_video(path, qid, event_loop);
+        log::info!("Restarted video for Q{} on loop", qid);
+    }
+
     fn stop_all(&mut self) {
         self.video_stop_flag.store(true, Ordering::Relaxed);
+        self.video_pause_flag.store(false, Ordering::Relaxed);
         self.latest_video_frame = None;
         self.video_frame_dirty = false;
         self.video_start_clock = None;
+        self.current_video_qid = None;
         self.audio_engine.stop_all();
         self.active_cues.clear();
         self.delayed_cues.clear();
@@ -837,6 +908,7 @@ impl App {
                 ac.state = CueState::Paused;
             }
         }
+        self.video_pause_flag.store(true, Ordering::Relaxed);
         self.paused = true;
         log::info!("Paused {} cue(s)", self.active_cues.len());
     }
@@ -848,6 +920,7 @@ impl App {
                 ac.state = CueState::Playing;
             }
         }
+        self.video_pause_flag.store(false, Ordering::Relaxed);
         self.paused = false;
         log::info!("Resumed {} cue(s)", self.active_cues.len());
     }
@@ -1204,6 +1277,31 @@ impl App {
     fn render_control(&mut self, event_loop: &ActiveEventLoop) {
         self.check_finished_cues(event_loop);
 
+        // Check for video cues that have looped and restart their video threads.
+        if let Some(video_qid) = self.current_video_qid {
+            if let Some(ac) = self.active_cues.iter_mut().find(|ac| ac.qid == video_qid) {
+                if let Some(ref counter) = ac.loop_counter {
+                    let current = counter.load(Ordering::Relaxed);
+                    if current > ac.video_loop_count {
+                        ac.video_loop_count = current;
+                        // Look up the cue's video path in the show file
+                        let path = {
+                            let Ok(state) = self.qplayer.state().lock() else { return };
+                            state.show_file.cues.iter()
+                                .find(|c| c.base().qid == video_qid)
+                                .and_then(|cue| match cue {
+                                    qplayer_core::Cue::Video { path, .. } => Some(path.clone()),
+                                    _ => None,
+                                })
+                        };
+                        if let Some(path) = path {
+                            self.restart_video(&path, video_qid, event_loop);
+                        }
+                    }
+                }
+            }
+        }
+
         // Check for delayed cues whose timer has expired
         {
             let now = std::time::Instant::now();
@@ -1232,6 +1330,7 @@ impl App {
                             if start_time.as_secs_f64() > 0.0
                                 && elapsed >= start_time.as_secs_f64()
                                 && !self.triggered_timecodes.contains(&base.qid)
+                                && cue.enabled()
                             {
                                 Some(cue.clone())
                             } else {
@@ -1270,13 +1369,23 @@ impl App {
         // Sync active cue state into the GUI shared state
         {
             let gui_active: Vec<qplayer_gui::ActiveCueInfo> = self.active_cues.iter().map(|ac| {
+                // For looping cues with explicit loop boundaries, show loop-relative
+                // position so the progress bar resets to 0 on each loop iteration.
+                let loop_length_frames = ac.loop_end_frame.saturating_sub(ac.loop_start_frame) as usize;
+                let (position, length) = if ac.state == CueState::PlayingLooped && loop_length_frames > 0 {
+                    let total_frames = ac.input.position() / 2; // mixer is stereo
+                    let rel_frames = total_frames % loop_length_frames;
+                    (rel_frames * 2, Some(loop_length_frames * 2))
+                } else {
+                    (ac.input.position(), ac.input.length())
+                };
                 qplayer_gui::ActiveCueInfo {
                     qid: ac.qid,
                     name: ac.name.clone(),
                     volume: ac.input.volume(),
                     paused: !ac.input.is_active(),
-                    position: ac.input.position(),
-                    length: ac.input.length(),
+                    position,
+                    length,
                     state: ac.state,
                 }
             }).collect();
@@ -1587,6 +1696,7 @@ fn video_decode_thread(
     clock: Arc<dyn Fn() -> Duration + Send + Sync>,
     start_clock: Duration,
     stop_flag: Arc<AtomicBool>,
+    pause_flag: Arc<AtomicBool>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
 ) {
     let mut source = match VideoSource::open(path, 1920, 1080) {
@@ -1598,6 +1708,12 @@ fn video_decode_thread(
     };
 
     while !stop_flag.load(Ordering::Relaxed) {
+        // When paused, sleep without decoding so we don't read ahead.
+        if pause_flag.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+
         match source.read_frame() {
             Some(frame) => {
                 let elapsed = clock().saturating_sub(start_clock);
@@ -1605,11 +1721,11 @@ fn video_decode_thread(
 
                 if frame_due > elapsed {
                     let sleep_for = frame_due - elapsed;
-                    // Cap sleep to avoid missing stop signals for too long
+                    // Cap sleep to avoid missing stop/pause signals for too long
                     std::thread::sleep(sleep_for.min(Duration::from_millis(50)));
                 }
 
-                if stop_flag.load(Ordering::Relaxed) {
+                if stop_flag.load(Ordering::Relaxed) || pause_flag.load(Ordering::Relaxed) {
                     break;
                 }
 

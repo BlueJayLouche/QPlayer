@@ -21,6 +21,7 @@ pub use biquad::Biquad;
 pub use buffered_source::BufferedSource;
 pub use channel_converter::MonoToStereo;
 pub use decoder::FfmpegDecoder;
+pub use ffmpeg_next::Error as FfmpegError;
 pub use engine::{AudioEngine, AudioError};
 pub use eq_processor::EqProcessor;
 pub use fade_processor::FadeProcessor;
