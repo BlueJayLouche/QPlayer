@@ -903,7 +903,7 @@ impl App {
                     path: path_str,
                     start_time: qplayer_core::Timespan::ZERO,
                     duration: qplayer_core::Timespan::ZERO,
-                    volume: 0.0,
+                    volume: 1.0,
                     pan: 0.0,
                     fade_in: 0.0,
                     fade_out: 0.0,
@@ -916,7 +916,7 @@ impl App {
                     path: path_str,
                     start_time: qplayer_core::Timespan::ZERO,
                     duration: qplayer_core::Timespan::ZERO,
-                    volume: 0.0,
+                    volume: 1.0,
                     pan: 0.0,
                     fade_in: 0.0,
                     fade_out: 0.0,
@@ -1348,6 +1348,11 @@ impl App {
 
         // Process commands that were queued during the UI frame
         self.process_commands(event_loop);
+
+        // Sync the mixer snapshot so newly-added inputs are visible to the audio callback.
+        // Must be called after process_commands() so any play() calls from this frame
+        // are reflected before the next callback fires.
+        self.audio_engine.refresh();
     }
 
     /// Render the video output window.

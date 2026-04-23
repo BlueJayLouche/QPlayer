@@ -22,11 +22,12 @@ pub struct AudioEngine {
     sample_rate: u32,
     channels: u16,
     /// Master limiter threshold (linear gain). 0.95 = -0.45 dBFS.
-    limiter_threshold: AtomicF32,
+    /// Shared with the audio callback via Arc so updates are visible immediately.
+    limiter_threshold: Arc<AtomicF32>,
     /// Master metering (peak/RMS).
     metering: Arc<MeteringProcessor>,
-    /// Master limiter core (lives in the audio callback).
-    limiter: std::sync::Mutex<Limiter>,
+    /// Master limiter core, shared with the audio callback so GR is readable from main thread.
+    limiter: Arc<std::sync::Mutex<Limiter>>,
 }
 
 /// Simple atomic f32 using `to_bits`/`from_bits`.
@@ -58,10 +59,19 @@ impl AudioEngine {
 
     /// Create an audio engine with a specific device.
     pub fn new(device: &cpal::Device) -> Result<Self, AudioError> {
-        let mut supported_configs = device.supported_output_configs()?;
-        let config = supported_configs
-            .find(|c| c.sample_format() == cpal::SampleFormat::F32)
-            .ok_or(AudioError::NoF32Format)?;
+        let all_configs: Vec<_> = device.supported_output_configs()?.collect();
+        // Prefer stereo F32 to avoid channel-count mismatches that cause wrong playback speed.
+        // Fall back to any F32 config if stereo is unavailable.
+        let config = all_configs
+            .iter()
+            .find(|c| c.sample_format() == cpal::SampleFormat::F32 && c.channels() == 2)
+            .or_else(|| {
+                all_configs
+                    .iter()
+                    .find(|c| c.sample_format() == cpal::SampleFormat::F32)
+            })
+            .ok_or(AudioError::NoF32Format)?
+            .clone();
 
         // Prefer 48kHz stereo, but accept whatever the device supports
         let sample_rate = config.min_sample_rate().0.max(48_000).min(config.max_sample_rate().0);
@@ -77,17 +87,19 @@ impl AudioEngine {
         let mixer = Arc::new(Mixer::new(channels, sample_rate));
         let mixer_clone = Arc::clone(&mixer);
 
-        // Master metering (reads from mixer output)
+        // Master metering — Arc shared so read_meters() on the main thread sees callback writes.
         let metering = Arc::new(MeteringProcessor::new(Box::new(NullSource {
             sample_rate,
             channels,
         })));
         let metering_clone = Arc::clone(&metering);
 
-        let limiter_threshold = AtomicF32::new(0.95);
-        let limiter_thresh_clone = AtomicF32::new(limiter_threshold.load(std::sync::atomic::Ordering::Relaxed));
-        let limiter = std::sync::Mutex::new(Limiter::new(0.95, sample_rate, channels));
-        let limiter_clone = std::sync::Mutex::new(Limiter::new(0.95, sample_rate, channels));
+        // Arc-shared so set_limiter_threshold() on the main thread is visible in the callback.
+        let limiter_threshold = Arc::new(AtomicF32::new(0.95));
+        let limiter_thresh_clone = Arc::clone(&limiter_threshold);
+        // Arc-shared so read_limiter_gr_db() on the main thread reads GR from the callback.
+        let limiter = Arc::new(std::sync::Mutex::new(Limiter::new(0.95, sample_rate, channels)));
+        let limiter_clone = Arc::clone(&limiter);
 
         let stream = device.build_output_stream(
             &config,
@@ -99,8 +111,8 @@ impl AudioEngine {
                     lim.threshold = thresh.clamp(0.01, 1.0);
                     lim.process(data);
                 }
-                // Master metering
-                metering_clone.read(data);
+                // Master metering: analyze the final mixed+limited output directly.
+                metering_clone.analyze(data);
             },
             move |err| {
                 log::error!("Audio stream error: {}", err);

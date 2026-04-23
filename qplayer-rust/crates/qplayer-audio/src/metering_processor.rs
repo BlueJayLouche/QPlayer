@@ -84,6 +84,45 @@ impl MeteringProcessor {
         self.out_version.load(Ordering::Acquire)
     }
 
+    /// Analyze an already-mixed buffer directly, bypassing the inner source.
+    ///
+    /// Use this from the audio callback after mixing and limiting, where the
+    /// samples to meter are already in a buffer rather than pulled from a chain.
+    pub fn analyze(&self, data: &[f32]) {
+        let inner = self.inner_mut();
+        let channels = self.source.channels() as usize;
+        let frames = data.len() / channels.max(1);
+
+        if channels == 2 {
+            for frame in 0..frames {
+                let l = data[frame * 2];
+                let r = data[frame * 2 + 1];
+                inner.peak_l = inner.peak_l.max(l.abs());
+                inner.peak_r = inner.peak_r.max(r.abs());
+                inner.sum_sq_l += (l as f64).powi(2);
+                inner.sum_sq_r += (r as f64).powi(2);
+            }
+        } else {
+            for frame in 0..frames {
+                for ch in 0..channels {
+                    let s = data[frame * channels + ch];
+                    inner.peak_l = inner.peak_l.max(s.abs());
+                    inner.sum_sq_l += (s as f64).powi(2);
+                }
+            }
+        }
+
+        inner.frame_count += frames as u32;
+        if inner.frame_count >= inner.interval_frames {
+            self.publish(inner);
+            inner.peak_l = 0.0;
+            inner.peak_r = 0.0;
+            inner.sum_sq_l = 0.0;
+            inner.sum_sq_r = 0.0;
+            inner.frame_count = 0;
+        }
+    }
+
     #[inline]
     #[allow(clippy::mut_from_ref)]
     fn inner_mut(&self) -> &mut MeterInner {

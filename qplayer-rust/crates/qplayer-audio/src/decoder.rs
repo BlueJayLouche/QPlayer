@@ -177,12 +177,15 @@ impl FfmpegDecoderInner {
         if is_empty {
             return 0;
         }
+        // Use the exact sample count, not plane.len(), to avoid reading FFmpeg alignment padding.
+        let nb_samples = frame.samples() * frame.channels() as usize;
+        if nb_samples == 0 {
+            self.swr_out = frame::Audio::empty();
+            return 0;
+        }
         let plane = frame.data(0);
         let src = unsafe {
-            std::slice::from_raw_parts(
-                plane.as_ptr() as *const f32,
-                plane.len() / std::mem::size_of::<f32>(),
-            )
+            std::slice::from_raw_parts(plane.as_ptr() as *const f32, nb_samples)
         };
         let to_copy = src.len().min(buffer.len());
         buffer[..to_copy].copy_from_slice(&src[..to_copy]);

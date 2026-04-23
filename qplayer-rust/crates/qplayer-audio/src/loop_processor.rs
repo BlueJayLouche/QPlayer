@@ -192,11 +192,19 @@ impl SampleProvider for LoopProcessor {
     }
 
     fn length(&self) -> Option<usize> {
-        // Length in total samples, accounting for loops
+        // Length in total samples, accounting for loops.
+        // Read from atomics so this is correct even before the first read() call.
         let inner = self.inner();
         let source_len = self.source.length()?;
         let source_frames = self.samples_to_frames(source_len);
-        let loop_frames = inner.end_frame.saturating_sub(inner.start_frame);
+        let cmd_end = self.cmd_end_frame.load(Ordering::Relaxed);
+        let effective_end = if cmd_end == 0 {
+            source_frames
+        } else {
+            cmd_end.min(source_frames)
+        };
+        let start = self.cmd_start_frame.load(Ordering::Relaxed).min(effective_end);
+        let loop_frames = effective_end.saturating_sub(start);
 
         match inner.loop_mode {
             LoopMode::OneShot | LoopMode::HoldLast => Some(self.frames_to_samples(loop_frames)),
