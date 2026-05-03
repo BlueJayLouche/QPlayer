@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: |
           dotnet tool install docfx
-          dotnet build -c Release
+          dotnet build -c Release QPlayer/QPlayer.csproj
           dotnet docfx
           dotnet run StarlightDocNet "api/" "docs/src/content/docs/api/"
 
