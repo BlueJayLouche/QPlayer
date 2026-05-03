@@ -22,6 +22,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+        EnableWindowsTargeting: true
     steps:
       - name: Checkout your repository using git
         uses: actions/checkout@v4
