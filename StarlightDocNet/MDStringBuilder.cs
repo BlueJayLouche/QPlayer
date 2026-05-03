@@ -7,8 +7,19 @@ namespace StarlightDocNet;
 public class MDStringBuilder
 {
     protected readonly StringBuilder sb = new();
+    public readonly string localURLRoot;
 
     public readonly static MDStringBuilder Shared = new();
+
+    public MDStringBuilder()
+    {
+        localURLRoot = "/";
+    }
+
+    public MDStringBuilder(string localURLRoot)
+    {
+        this.localURLRoot = localURLRoot;
+    }
 
     public MDStringBuilder Clear()
     {
@@ -29,9 +40,10 @@ public class MDStringBuilder
         return this;
     }
 
-    public MDStringBuilder Add(string s)
+    public MDStringBuilder Add(string? s)
     {
-        sb.Append(s);
+        if (s != null)
+            sb.Append(s);
         return this;
     }
 
@@ -83,6 +95,20 @@ public class MDStringBuilder
         return this;
     }
 
+    public MDStringBuilder Para()
+    {
+        if (sb[^1] != Environment.NewLine[^1])
+            sb.AppendLine();
+        sb.AppendLine();
+        return this;
+    }
+
+    public MDStringBuilder Break()
+    {
+        sb.AppendLine("  ");
+        return this;
+    }
+
     public MDStringBuilder H1(string s)
     {
         sb.Append("# ").AppendLine(s);
@@ -103,7 +129,7 @@ public class MDStringBuilder
 
     public MDStringBuilder H4(string s)
     {
-        sb.Append("### ").AppendLine(s);
+        sb.Append("#### ").AppendLine(s);
         return this;
     }
 
@@ -163,6 +189,8 @@ public class MDStringBuilder
 
     public CodeBlockBuilder CodeBlock(string? language = null) => new(sb, language);
 
+    public AsideBuilder Aside(string? type = null) => new(sb, type);
+
     public TableBuilder Table() => new(this);
 
     public readonly struct CodeBlockBuilder : IDisposable
@@ -181,6 +209,25 @@ public class MDStringBuilder
         public readonly void Dispose()
         {
             sb.AppendLine("```");
+        }
+    }
+
+    public readonly struct AsideBuilder : IDisposable
+    {
+        private readonly StringBuilder sb;
+
+        public AsideBuilder(StringBuilder sb, string? type)
+        {
+            this.sb = sb;
+            if (type == null)
+                sb.AppendLine(":::");
+            else
+                sb.Append(":::").Append(type).AppendLine();
+        }
+
+        public readonly void Dispose()
+        {
+            sb.AppendLine(":::");
         }
     }
 
@@ -207,7 +254,7 @@ public class MDStringBuilder
             return md;
         }
 
-        public MDStringBuilder Cell(string s)
+        public MDStringBuilder Cell(string? s = null)
         {
             if (firstRow)
             {
@@ -218,7 +265,37 @@ public class MDStringBuilder
                     sb.Append("---|");
                 sb.AppendLine();
             }
-            sb.Append(" | ").Append(s);
+            sb.Append(" | ");
+            if (s != null)
+                sb.Append(s);
+            col++;
+            if (col == nCols)
+            {
+                col = 0;
+                sb.AppendLine(" | ");
+            }
+
+            return md;
+        }
+
+        public MDStringBuilder BeginCell()
+        {
+            if (firstRow)
+            {
+                firstRow = false;
+                sb.AppendLine(" | ");
+                sb.Append(" |");
+                for (int i = 0; i < nCols; i++)
+                    sb.Append("---|");
+                sb.AppendLine();
+            }
+            sb.Append(" | ");
+
+            return md;
+        }
+
+        public MDStringBuilder EndCell()
+        {
             col++;
             if (col == nCols)
             {
@@ -231,7 +308,7 @@ public class MDStringBuilder
 
         public void Dispose()
         {
-            for (; col < nCols;)
+            while (firstRow || col > 0)
                 Cell("  ");
             sb.AppendLine();
         }
