@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "StarlightDocNet": {
+      "commandName": "Project",
+      "commandLineArgs": "\"C:\\Users\\Thoma\\OneDrive\\Computer Sync\\visual studio 2015\\Projects\\QPlayer\\api\" \r\n\"C:\\Users\\Thoma\\OneDrive\\Computer Sync\\visual studio 2015\\Projects\\QPlayer\\docs\\src\\content\\docs\\api\""
+    }
+  }
+}

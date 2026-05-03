@@ -22,9 +22,25 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+        EnableWindowsTargeting: true
     steps:
       - name: Checkout your repository using git
         uses: actions/checkout@v4
+
+        # Build API docs
+      - uses: actions/setup-dotnet@v2
+        with:
+          dotnet-version: 10.0.x
+      - name: DocFX
+        shell: bash
+        run: |
+          dotnet tool install docfx
+          dotnet build -c Release QPlayer/QPlayer.csproj
+          dotnet docfx
+          dotnet run -c Release --project StarlightDocNet "api/" "docs/src/content/docs/api/"
+
+        # Build the rest of the docs
       - name: Install, build, and upload your site output
         uses: withastro/action@v4
         with:

@@ -61,6 +61,15 @@ export default defineConfig({
 					label: 'Reference',
 					autogenerate: { directory: 'reference' },
 				},
+				{
+					label: 'API',
+					autogenerate: { directory: 'api' },
+					collapsed: true,
+					badge: {
+						class: 'warning',
+						text: 'For Developers'
+					},
+				}
 			],
 			customCss: [
 				// Relative path to your custom CSS file

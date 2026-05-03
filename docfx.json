@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/dotnet/docfx/main/schemas/docfx.schema.json",
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "../QPlayer",
+          "files": [
+            "**/*.csproj"
+          ]
+        }
+      ],
+      "output": "api",
+      "outputFormat": "apiPage",
+      "categoryLayout": "nested",
+      "namespaceLayout": "nested",
+      "memberLayout": "samePage",
+      "enumSortOrder": "declaringOrder"
+    }
+  ]
+}
