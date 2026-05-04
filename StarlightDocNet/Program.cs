@@ -15,13 +15,26 @@ internal class Program
         string dstPath = args[1];
 
         Stopwatch sw = Stopwatch.StartNew();
-        foreach (var path in Directory.EnumerateFiles(srcPath))
+        Log("Preparing to process files...");
+        var srcFiles = Directory.EnumerateFiles(srcPath).ToArray();
+
+        var apiDocRootInd = dstPath.LastIndexOf("docs");
+        var apiDocRoot = "/";
+        if (apiDocRootInd != -1)
+            apiDocRoot = dstPath[(apiDocRootInd + 4)..].Replace(Path.DirectorySeparatorChar, '/');
+        if (!apiDocRoot.EndsWith('/'))
+            apiDocRoot += '/';
+
+        var srcFileNames = srcFiles.Select(x => Path.GetFileNameWithoutExtension(x)).ToHashSet();
+
+        Parallel.ForEach(srcFiles, path =>
         {
-            YML2MD yml2md = new();
-            yml2md.Process(path, dstPath);
-        }
+            YML2MD.Process(path, dstPath, apiDocRoot, srcFileNames);
+        });
+        //foreach (var path in srcFiles)
+        //    YML2MD.Process(path, dstPath, dstPath, srcFileNames);
         sw.Stop();
-        Log($"Completed it {sw}!");
+        Log($"Completed in {sw}!");
     }
 
     public static void Assert(bool condition, string? msg = null, [CallerArgumentExpression(nameof(condition))] string? expr = null, [CallerMemberName] string caller = "")

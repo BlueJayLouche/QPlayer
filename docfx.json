@@ -6,8 +6,9 @@
         {
           "src": "../QPlayer",
           "files": [
-            "**/*.csproj"
-          ]
+            "QPlayer/QPlayer.csproj"
+          ],
+          "exclude": "*.g.cs"
         }
       ],
       "output": "api",

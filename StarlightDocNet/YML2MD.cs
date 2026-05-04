@@ -5,6 +5,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using YamlDotNet.Core;
 using YamlDotNet.Serialization;
@@ -12,9 +13,9 @@ using static StarlightDocNet.Program;
 
 namespace StarlightDocNet;
 
-internal class YML2MD
+internal static class YML2MD
 {
-    public void Process(string srcPath, string dstDir)
+    public static void Process(string srcPath, string dstDir, string apiDocRoot, HashSet<string> srcs)
     {
         // File path stuff
         var fname = Path.GetFileNameWithoutExtension(srcPath);
@@ -23,12 +24,6 @@ internal class YML2MD
         var shortName = prefixInd != -1 ? fname[(prefixInd + 1)..] : fname;
         subdir = subdir.Replace('.', Path.DirectorySeparatorChar);
         var dstPath = Path.Combine(dstDir, subdir, shortName + ".md");
-        var apiDocRootInd = dstDir.LastIndexOf("docs");
-        var apiDocRoot = "/";
-        if (apiDocRootInd != -1)
-            apiDocRoot = dstDir[(apiDocRootInd + 4)..].Replace(Path.DirectorySeparatorChar, '/');
-        if (!apiDocRoot.EndsWith('/'))
-            apiDocRoot += '/';
 
         if (fname == "toc")
             return;
@@ -41,10 +36,11 @@ internal class YML2MD
         var doc = ser.Deserialize(tr) as IDictionary<object, object>;
         Assert(doc != null);
 
-        var md = new MDStringBuilder(apiDocRoot);
+        var md = new MDStringBuilder(apiDocRoot, srcs);
 
-        var title = ((string)doc!["title"]).Split(' ');
-        var docType = title[0] switch
+        var title = (string)doc!["title"];
+        var titleSplit = title.IndexOf(' ');
+        var docType = title.AsSpan(0, titleSplit) switch
         {
             "Class" => DocType.Class,
             "Namespace" => DocType.Namespace,
@@ -55,7 +51,7 @@ internal class YML2MD
             _ => throw new Exception()
         };
 
-        md.MetaHeader(title[1], null, docType == DocType.Namespace ? 0 : 10);
+        md.MetaHeader(title, null, docType == DocType.Namespace ? 0 : 10, title[(titleSplit + 1)..]);
 
         var body = doc["body"].AsArray<IDictionary<object, object>>();
         int i = 0;
@@ -99,8 +95,8 @@ internal class YML2MD
                         break;
                     case "h3": md.H3((string)item["h3"]); break;
                     case "h4": md.H4((string)item["h4"]); break;
-                    case "markdown": md.Line((string)item["markdown"]); break;
 
+                    case "markdown": md.Add(item.As<Markdown>()); break;
                     case "inheritance": md.Add(item.As<Inheritance>()); break;
                     case "list": md.Add(item.As<List>()); break;
                     case "api2": md.Add(item.As<Api2>()); break;
@@ -160,14 +156,18 @@ internal class YML2MD
             if (nextItemName == string.Empty)
                 return;
 
-            var itemSlug = '#' + nextItemName.Without(',', '<', '>', '(', ')', '[', ']', '@', '#', '^', '`')
+            var itemSlug = '#' + nextItemName.RemoveTypeParam()
+                .Without(',', '<', '>', '(', ')', '[', ']', '@', '#', '^', '`', '?', '~')
                 .Replace(' ', '-').ToLowerInvariant();
 
             table.Cell();
             table.BeginCell();
             md.Link(itemSlug, nextItemName.EscapeLink());
             table.EndCell();
-            table.Cell(nextDesc);
+            table.BeginCell();
+            if (nextDesc != null)
+                md.AddMarkdown(nextDesc);
+            table.EndCell();
             nextDesc = null;
             nextItemName = string.Empty;
         }
@@ -188,33 +188,55 @@ public static partial class ExtensionMethods
 {
     [ThreadStatic]
     private static StringBuilder? sbInst;
+    private static StringBuilder SharedStringBuilder => (sbInst ??= new()).Clear();
     internal static string Without(this string str, params Span<char> toRemove)
     {
-        sbInst ??= new();
-        sbInst.Clear();
-        sbInst.EnsureCapacity(str.Length);
+        var sb = SharedStringBuilder;
+        sb.EnsureCapacity(str.Length);
 
         foreach (var c in str)
             if (!toRemove.Contains(c))
-                sbInst.Append(c);
+                sb.Append(c);
 
-        return sbInst.ToString();
+        return sb.ToString();
+    }
+
+    internal static string RemoveTypeParam(this string str)
+    {
+        var sb = SharedStringBuilder;
+        sb.EnsureCapacity(str.Length);
+
+        int tpInd;
+        var s = str.AsSpan();
+        while ((tpInd = s.IndexOf('<')) != -1)
+        {
+            sb.Append(s[..tpInd]);
+            int end = s.IndexOf('>');
+            if (end == -1)
+            {
+                s = s[(tpInd + 1)..];
+                break;
+            }
+            s = s[(end + 1)..];
+        }
+        sb.Append(s);
+
+        return sb.ToString();
     }
 
     internal static string EscapeLink(this string str)
     {
-        sbInst ??= new();
-        sbInst.Clear();
-        sbInst.EnsureCapacity(str.Length);
+        var sb = SharedStringBuilder;
+        sb.EnsureCapacity(str.Length);
 
         foreach (var c in str)
         {
             if (c == '[' || c == ']')
-                sbInst.Append('\\');
-            sbInst.Append(c);
+                sb.Append('\\');
+            sb.Append(c);
         }
 
-        return sbInst.ToString();
+        return sb.ToString();
     }
 
     internal static MDStringBuilder Add(this MDStringBuilder md, Inline? inline)
@@ -253,24 +275,126 @@ public static partial class ExtensionMethods
             var url = link.url ?? string.Empty;
             if (!url.StartsWith("http"))
             {
-                if (url.EndsWith(".html"))
-                    url = url[..^5];
-                url = url.Replace('.', '/');
-                url = md.localURLRoot + url;
-                url = url.ToLowerInvariant();
+                var sb = SharedStringBuilder;
+                sb.Append(md.localURLRoot);
+
+                var section = url.LastIndexOf('#');
+                var fileExt = url.LastIndexOf(".html");
+                if (fileExt != -1)
+                    sb.Append(url.AsSpan(0, fileExt));
+                else if (section != -1)
+                    sb.Append(url.AsSpan(0, section));
+                else
+                    sb.Append(fileExt);
+                sb.Replace('.', '/');
+
+                url = sb.ToString().ToLowerInvariant();
             }
             md.Link(url, link.text);
             return md;
         }
     }
 
-    internal static MDStringBuilder Add(this MDStringBuilder md, Markdown val)
+    internal static MDStringBuilder AddMarkdown(this MDStringBuilder md, string? str)
     {
-        var str = val.markdown;
-        // TODO: Replace <xref href="QPlayer.ViewModels.MainViewModel.activeCues" data-throw-if-not-resolved="false"></xref>
-        md.Add(str);
+        if (str == null)
+            return md;
+
+        var urlSb = SharedStringBuilder;
+        var s = str.AsSpan();
+        int xrefPos;
+        while ((xrefPos = s.IndexOf("<xref")) != -1)
+        {
+            // Append everything up until the match
+            md.Add(s[..xrefPos]);
+
+            // Find the end of the xref
+            int end = s.IndexOf("</xref>");
+            if (end == -1)
+                break; // malformed
+            else
+                end += 7;
+
+            // Find and convert the href
+            int href = s.IndexOf("href=\"");
+            if (href == -1)
+                break; // malformed
+            else
+                href += 6;
+            int hrefEnd = s[href..].IndexOf('"');
+            if (hrefEnd == -1)
+                break; //malformed
+            else
+                hrefEnd += href;
+
+            var hrefSpan = s[href..hrefEnd];
+            var hrefStr = new string(hrefSpan);
+            hrefStr = hrefStr.Replace("%60", "-");
+            // This could look something like: QPlayer.ViewModels.MainViewModel.activeCues
+            // we now need to convert this into an actual url
+            if (md.knownPages.Contains(hrefStr))
+            {
+                AppendURL(hrefStr);
+            }
+            else
+            {
+                // Try to link to a member on a given page instead
+                int bracket = hrefSpan.IndexOfAny('(', '[', '<');
+                int dot;
+                if (bracket == -1)
+                    dot = hrefSpan.LastIndexOf('.');
+                else
+                    dot = hrefSpan[..bracket].LastIndexOf('.');
+                var hrefPrefix = hrefSpan[..dot];
+                string hrefPrefStr = new(hrefPrefix);
+                string hrefSuffix = new(hrefSpan[(dot + 1)..]);
+                hrefPrefStr = hrefPrefStr.Replace("%60", "-");
+                hrefSuffix = Uri.UnescapeDataString(hrefSuffix.Replace("%60", "-")); // TODO: this will never correctly resolve for method xrefs as the parameter types always use fully qualified names and never aliases.
+                if (md.knownPages.Contains(hrefPrefStr))
+                    AppendURL(hrefPrefStr, hrefSuffix);
+                else
+                    md.Code(hrefSuffix);
+            }
+
+            s = s[end..];
+        }
+        md.Add(s);
         return md;
+
+        void AppendURL(string hrefStr, string? section = null)
+        {
+            urlSb.Clear();
+            urlSb.Append(md.localURLRoot);
+            urlSb.Append(hrefStr.ToLowerInvariant());
+            urlSb.Replace('.', '/');
+
+            if (section != null)
+            {
+                urlSb.Append('#');
+                urlSb.Append(section.ToLowerInvariant());
+            }
+
+
+            var memberName = section;
+            if (memberName == null)
+            {
+                int bracket = hrefStr.IndexOfAny('(', '[', '<');
+                int dot;
+                if (bracket == -1)
+                    dot = hrefStr.LastIndexOf('.');
+                else
+                    dot = hrefStr.LastIndexOf('.', 0, bracket);
+
+                if (dot != -1)
+                    memberName = hrefStr[(dot + 1)..];
+                else
+                    memberName = hrefStr;
+            }
+            md.Link(urlSb.ToString(), section ?? memberName);
+        }
     }
+
+    internal static MDStringBuilder Add(this MDStringBuilder md, Markdown val) => AddMarkdown(md, val.markdown).Line();
 
     internal static MDStringBuilder CodeBlock(this MDStringBuilder md, Code code)
     {
@@ -375,7 +499,7 @@ public static partial class ExtensionMethods
                     md.Italic("DEPRECATED ");
                 //if (item.optional ?? false)
                 //    md.Italic("Optional, ");
-                md.Add(item.description?.Without('\n', '\r'));
+                md.AddMarkdown(item.description?.Without('\n', '\r'));
                 table.EndCell();
             }
         }
@@ -394,7 +518,7 @@ public static partial class ExtensionMethods
                     md.Italic("DEPRECATED ");
                 //if (item.optional ?? false)
                 //    md.Italic("Optional, ");
-                md.Add(item.description?.Without('\n', '\r'));
+                md.AddMarkdown(item.description?.Without('\n', '\r'));
                 table.EndCell();
             }
         }

@@ -7,18 +7,20 @@ namespace StarlightDocNet;
 public class MDStringBuilder
 {
     protected readonly StringBuilder sb = new();
-    public readonly string localURLRoot;
+    public readonly string localURLRoot = "/";
+    public readonly HashSet<string> knownPages = [];
 
     public readonly static MDStringBuilder Shared = new();
 
     public MDStringBuilder()
     {
-        localURLRoot = "/";
+
     }
 
-    public MDStringBuilder(string localURLRoot)
+    public MDStringBuilder(string localURLRoot, HashSet<string> knownPages)
     {
         this.localURLRoot = localURLRoot;
+        this.knownPages = knownPages;
     }
 
     public MDStringBuilder Clear()
@@ -35,6 +37,12 @@ public class MDStringBuilder
     public static implicit operator string(MDStringBuilder md) => md.ToString();
 
     public MDStringBuilder Add(char c)
+    {
+        sb.Append(c);
+        return this;
+    }
+
+    public MDStringBuilder Add(ReadOnlySpan<char> c)
     {
         sb.Append(c);
         return this;
@@ -62,6 +70,18 @@ public class MDStringBuilder
     public MDStringBuilder Add(float x)
     {
         sb.Append(x);
+        return this;
+    }
+
+    public MDStringBuilder Line()
+    {
+        sb.AppendLine();
+        return this;
+    }
+
+    public MDStringBuilder Line(ReadOnlySpan<char> s)
+    {
+        sb.Append(s).AppendLine();
         return this;
     }
 
@@ -175,7 +195,7 @@ public class MDStringBuilder
         return this;
     }
 
-    public MDStringBuilder MetaHeader(string title, string? description = null, int? order = null)
+    public MDStringBuilder MetaHeader(string title, string? description = null, int? order = null, string? sidebarTitle = null)
     {
         sb.AppendLine("---");
         sb.Append("title: ").AppendLine(title);
@@ -183,6 +203,8 @@ public class MDStringBuilder
             sb.Append("description: ").AppendLine(description);
         if (order != null)
             sb.Append("order: ").AppendLine(order.Value.ToString());
+        if (sidebarTitle != null)
+            sb.AppendLine("sidebar: ").Append("  label: ").AppendLine(sidebarTitle);
         sb.AppendLine("---").AppendLine();
         return this;
     }
